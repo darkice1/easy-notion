@@ -1,4 +1,5 @@
 import easy.io.EHttpClient
+import net.sf.json.JSONArray
 import net.sf.json.JSONObject
 
 class ENotion(val token:String) {
@@ -27,11 +28,24 @@ class ENotion(val token:String) {
 		return buf.toString()
 	}
 
-	private fun postObject(funname:String, urlparm:String,postjson:JSONObject?=null): JSONObject {
+	private fun postObject(funname:String, urlparm:String="",postjson:JSONObject?=null): JSONObject {
 		val url = "$apiurl$funname/$urlparm"
-		println(url)
+		println("postObject: $url")
+		val post = if (postjson!=null)
+		{
+			val map = HashMap<String,String>()
+			map[""] = postjson.toString()
+			map
+		}
+		else
+		{
+			null
+		}
 
-		val result = client.get(url,header,null)
+		println(postjson)
+
+
+		val result = client.postToString(url,post,header)
 //		val result = HttpUtil.post(url, json.toString(), token)
 		return JSONObject.fromObject(result)
 	}
@@ -45,11 +59,43 @@ class ENotion(val token:String) {
 		return JSONObject.fromObject(result)
 	}
 
-	fun databasesInfo(id:String): JSONObject {
+	/**
+	 * https://developers.notion.com/reference/retrieve-a-database
+	 */
+	fun retrieveDatabases(id:String): JSONObject {
 		return getObject("databases",id)
 	}
 
-	fun databasesQuery(id:String,postjson:JSONObject?=null): JSONObject {
+	/**
+	 * https://developers.notion.com/reference/retrieve-a-page
+	 */
+	fun retrievePages(id:String): JSONObject {
+		return getObject("pages",id)
+	}
+
+	fun createPages(parent:JSONObject,properties:JSONObject,children: JSONArray?=null,icon:JSONObject?=null,cover:JSONObject?=null): JSONObject {
+		val json = JSONObject()
+		json["parent"] = parent
+		json["properties"] = properties
+		if (children != null)
+		{
+			json["children"] = children
+		}
+		if (icon != null)
+		{
+			json["icon"] = icon
+		}
+		if (cover != null)
+		{
+			json["cover"] = cover
+		}
+		return postObject("pages", postjson = json)
+	}
+
+	/**
+	 * https://developers.notion.com/reference/post-database-query
+	 */
+	fun queryDatabases(id:String, postjson:JSONObject?=null): JSONObject {
 		return postObject("databases","$id/query",postjson)
 	}
 }

@@ -40,6 +40,8 @@
         <maven.compiler.compilerVersion>1.8</maven.compiler.compilerVersion>
         <javadocExecutable>${java.home}/../bin/javadoc</javadocExecutable>
         <kotlin.version>1.4.10</kotlin.version>
+
+        <notion-sdk.version>0.2.2</notion-sdk.version>
     </properties>
     <distributionManagement>
         <snapshotRepository>
@@ -85,6 +87,11 @@
         </distributionManagement>-->
 
     <dependencies>
+        <dependency>
+            <groupId>com.github.seratch</groupId>
+            <artifactId>notion-sdk-jvm-core</artifactId>
+            <version>${notion-sdk.version}</version>
+        </dependency>
         <dependency>
             <groupId>com.github.darkice1</groupId>
             <artifactId>easy</artifactId>
