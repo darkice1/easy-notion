@@ -1,6 +1,3 @@
-以下是一个基于`ENotion`内容生成的`readme.md`英文介绍示例：
-
-```markdown
 # ENotion
 
 `ENotion` is a Kotlin library for interacting with the Notion API, supporting the conversion of Notion database content into HTML format.
@@ -8,17 +5,17 @@
 ## Features
 
 - **Supported Notion Block Types**:
-  - Paragraph (`paragraph`)
-  - Headings (`heading_1`, `heading_2`, `heading_3`)
-  - List Items (`bulleted_list_item`, `numbered_list_item`)
-  - Divider (`divider`)
-  - Image (`image`)
-  - Table (`table`)
+    - Paragraph (`paragraph`)
+    - Headings (`heading_1`, `heading_2`, `heading_3`)
+    - List Items (`bulleted_list_item`, `numbered_list_item`)
+    - Divider (`divider`)
+    - Image (`image`)
+    - Table (`table`)
 
 - **HTML Output**:
-  - Automatically generates HTML tags (e.g., `<p>`, `<h1>`, `<ul>`, `<table>`, etc.).
-  - Supports style customization (e.g., image dimensions, table width).
-  - Built-in stylesheet for basic styling.
+    - Automatically generates HTML tags (e.g., `<p>`, `<h1>`, `<ul>`, `<table>`, etc.).
+    - Supports style customization (e.g., image dimensions, table width).
+    - Built-in stylesheet for basic styling.
 
 ## Usage
 
@@ -111,4 +108,3 @@ object TestNotionTools {
 ## License
 
 This project is licensed under the MIT License.
-```
