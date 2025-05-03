@@ -12,6 +12,8 @@ target/
 *.iws
 *.iml
 *.ipr
+.kotlin/
+.gradle/
 
 config.txt
 
