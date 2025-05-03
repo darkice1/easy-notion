@@ -13,7 +13,7 @@ plugins {
 group = "com.github.darkice1"
 version = "0.0.1"
 
-val projectName = "easy-wordpress"
+val projectName = "easy-notion"
 val projectDesc = "Neo easy Notion SDK."
 val repoName = "EASYNOTION"
 
@@ -29,6 +29,7 @@ java {
 // -------- 仓库 --------
 repositories {
 	mavenCentral()
+	mavenLocal()
 }
 
 // -------- 依赖 --------
@@ -66,6 +67,7 @@ publishing {
 	publications {
 		create<MavenPublication>("mavenJava") {
 			from(components["java"])
+			artifactId = projectName
 
 			pom {
 				name.set(projectName)
