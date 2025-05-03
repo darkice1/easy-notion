@@ -29,7 +29,6 @@ java {
 // -------- 仓库 --------
 repositories {
 	mavenCentral()
-	maven("https://jcenter.bintray.com/")
 }
 
 // -------- 依赖 --------
