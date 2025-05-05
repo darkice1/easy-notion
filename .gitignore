@@ -15,7 +15,7 @@ target/
 .kotlin/
 .gradle/
 
-config.txt
+config.properties
 
 ### Eclipse ###
 .apt_generated

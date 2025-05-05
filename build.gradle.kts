@@ -34,8 +34,8 @@ repositories {
 
 // -------- 依赖 --------
 dependencies {
-	implementation("com.github.darkice1:easy:1.0.79")
 	implementation("com.squareup.okhttp3:okhttp:4.12.0")
+	implementation("org.json:json:20250107")
 
 	implementation(kotlin("stdlib"))
 	testImplementation(kotlin("test"))

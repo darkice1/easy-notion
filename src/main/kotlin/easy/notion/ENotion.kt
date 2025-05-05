@@ -13,12 +13,12 @@
  */
 package easy.notion
 
-import net.sf.json.JSONArray
-import net.sf.json.JSONObject
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -45,7 +45,7 @@ class ENotion(
 	 */
 	private fun renderRichText(richArray: JSONArray): String {
 		val sb = StringBuilder()
-		for (i in 0 until richArray.size) {
+		for (i in 0 until richArray.length()) {
 			val obj = richArray.getJSONObject(i)
 			val textObj = obj.getJSONObject("text")
 			val content = textObj.getString("content")
@@ -80,7 +80,7 @@ class ENotion(
 			.build()
 		this.client.newCall(request).execute().use { response ->
 			if (!response.isSuccessful) throw IOException("Unexpected code $response")
-			val json = JSONObject.fromObject(response.body?.string())
+			val json = JSONObject(response.body?.string())
 			return json.getJSONArray("results")
 		}
 	}
@@ -100,19 +100,19 @@ class ENotion(
 
 		client.newCall(request).execute().use { response ->
 			if (!response.isSuccessful) throw IOException("Unexpected code $response")
-			val responseJson = JSONObject.fromObject(response.body?.string())
+			val responseJson = JSONObject(response.body?.string())
 			val results = responseJson.getJSONArray("results")
 			val output = JSONArray()
 
-			for (i in 0 until results.size) {
+			for (i in 0 until results.length()) {
 				val page = results.getJSONObject(i)
 				val properties = page.getJSONObject("properties")
 				val item = JSONObject()
 
 				// 添加页面层面的唯一 ID、创建和更新时间
-				item["id"] = page.getString("id")
-				item["created_time"] = page.getString("created_time")
-				item["last_edited_time"] = page.getString("last_edited_time")
+				item.put("id", page.getString("id"))
+				item.put("created_time", page.getString("created_time"))
+				item.put("last_edited_time", page.getString("last_edited_time"))
 
 				for (keyAny in properties.keys()) {
 					val key = keyAny as String
@@ -120,13 +120,15 @@ class ENotion(
 					when (prop.getString("type")) {
 						"title" -> {
 							val titleArray = prop.getJSONArray("title")
-							if (titleArray.isNotEmpty()) {
+							if (!titleArray.isEmpty) {
 								val titleText = titleArray.getJSONObject(0)
 									.getJSONObject("text")
 									.getString("content")
-								item[key] = titleText
+//								item[key] = titleText
+								item.put(key, titleText)
 							} else {
-								item[key] = ""
+//								item[key] = ""
+								item.put(key, "")
 							}
 						}
 
@@ -134,58 +136,70 @@ class ENotion(
 							val texts = prop.getJSONArray("rich_text")
 								.map { it as JSONObject }
 								.joinToString("") { it.getJSONObject("text").getString("content") }
-							item[key] = texts
+//							item[key] = texts
+							item.put(key, texts)
 						}
 
 						"number" -> {
-							item[key] = prop.get("number")
+//							item[key] = prop.get("number")
+							item.put(key, prop.get("number"))
 						}
 
 						"checkbox" -> {
-							item[key] = prop.getBoolean("checkbox")
+//							item[key] = prop.getBoolean("checkbox")
+							item.put(key, prop.get("checkbox"))
 						}
 
 						"select" -> {
 							val sel = prop.optJSONObject("select")
-							item[key] = sel?.getString("name") ?: ""
+//							item[key] = sel?.getString("name") ?: ""
+							item.put(key, sel?.getString("name") ?: "")
 						}
 
 						"multi_select" -> {
 							val arr = prop.getJSONArray("multi_select")
 							val names = arr.map { (it as JSONObject).getString("name") }
-							item[key] = names
+//							item[key] = names
+							item.put(key, names)
 						}
 
 						"date" -> {
 							val dateObj = prop.optJSONObject("date")
-							item[key] = dateObj?.getString("start") ?: ""
+//							item[key] = dateObj?.getString("start") ?: ""
+							item.put(key, dateObj?.getString("start") ?: "")
 						}
 
 						"url" -> {
-							item[key] = prop.optString("url", "")
+//							item[key] = prop.optString("url", "")
+							item.put(key, prop.optString("url", ""))
 						}
 
 						"email" -> {
-							item[key] = prop.optString("email", "")
+//							item[key] = prop.optString("email", "")
+							item.put(key, prop.optString("email", ""))
 						}
 
 						"phone_number" -> {
-							item[key] = prop.optString("phone_number", "")
+//							item[key] = prop.optString("phone_number", "")
+							item.put(key, prop.optString("phone_number", ""))
 						}
 
 						"created_time" -> {
 							// 数据库属性类型为 created_time，直接取属性中的时间戳
-							item[key] = prop.getString("created_time")
+//							item[key] = prop.getString("created_time")
+							item.put(key, prop.getString("created_time"))
 						}
 
 						"last_edited_time" -> {
 							// 数据库属性类型为 last_edited_time，直接取属性中的时间戳
-							item[key] = prop.getString("last_edited_time")
+//							item[key] = prop.getString("last_edited_time")
+							item.put(key, prop.getString("last_edited_time"))
 						}
 
 						else -> {
 							// 其他类型统一转为字符串
-							item[key] = prop.toString()
+//							item[key] = prop.toString()
+							item.put(key, prop.toString())
 						}
 					}
 				}
@@ -195,7 +209,7 @@ class ENotion(
 				val htmlBuilder = StringBuilder()
 				var currentListType: String? = null
 
-				for (j in 0 until blocks.size) {
+				for (j in 0 until blocks.length()) {
 					val block = blocks.getJSONObject(j)
 					val type = block.getString("type")
 					// 统一列表关闭逻辑
@@ -264,20 +278,20 @@ class ENotion(
 							val tblObj = block.getJSONObject("table")
 							val hasCol = tblObj.optBoolean("has_column_header", false)
 //							val hasRow = tblObj.optBoolean("has_row_header", false)
-							if (hasCol && rows.isNotEmpty()) {
+							if (hasCol && !rows.isEmpty) {
 								htmlBuilder.append("<thead><tr>")
 								val hdr = rows.getJSONObject(0).getJSONObject("table_row").getJSONArray("cells")
-								for (c in 0 until hdr.size) {
+								for (c in 0 until hdr.length()) {
 									val txt = renderRichText(hdr.getJSONArray(c))
 									htmlBuilder.append("<th>").append(txt).append("</th>")
 								}
 								htmlBuilder.append("</tr></thead>")
 							}
 							htmlBuilder.append("<tbody>")
-							for (r in (if (hasCol) 1 else 0) until rows.size) {
+							for (r in (if (hasCol) 1 else 0) until rows.length()) {
 								htmlBuilder.append("<tr>")
 								val cells = rows.getJSONObject(r).getJSONObject("table_row").getJSONArray("cells")
-								for (c in 0 until cells.size) {
+								for (c in 0 until cells.length()) {
 									val txt = renderRichText(cells.getJSONArray(c))
 									if (c == 0 && tblObj.optBoolean("has_row_header", false)) {
 										htmlBuilder.append("<th scope=\"row\">").append(txt).append("</th>")
@@ -312,9 +326,13 @@ class ENotion(
 					htmlBuilder.insert(0, styleTag)
 				}
 //				println(htmlBuilder.toString())
-				item["content"] = htmlBuilder.toString()
+//				item["content"] = htmlBuilder.toString()
+				item.put("content", htmlBuilder.toString())
 
-				output.add(item)
+
+//				output.add(item)
+				output.put(item)
+//				println(item)
 			}
 
 			return output
@@ -343,7 +361,8 @@ class ENotion(
 						put("type", "text")
 						put("text", textObj)
 					}
-					prop[type] = JSONArray().apply { add(wrapper) }
+//					prop[type] = JSONArray().apply { add(wrapper) }
+					prop.put(type, JSONArray().apply { put(wrapper) })
 				}
 
 				"number" -> {
@@ -353,7 +372,9 @@ class ENotion(
 						is Boolean -> if (value) 1 else 0
 						else -> null
 					}
-					if (num != null) prop["number"] = num else continue    // 若无法转换则跳过
+//					if (num != null) prop["number"] = num else continue    // 若无法转换则跳过
+					if (num != null) prop.put("number", num) else continue
+
 				}
 
 				"checkbox" -> {
@@ -363,7 +384,8 @@ class ENotion(
 						is Number -> value.toInt() != 0
 						else -> false
 					}
-					prop["checkbox"] = bool
+//					prop["checkbox"] = bool
+					prop.put("checkbox", bool)
 				}
 
 				"select" -> {
@@ -371,24 +393,30 @@ class ENotion(
 						is String -> value
 						else -> value.toString()
 					}
-					prop["select"] = JSONObject().apply { put("name", name) }
+//					prop["select"] = JSONObject().apply { put("name", name) }
+					prop.put("select", JSONObject().apply { put("name", name) })
 				}
 
 				"multi_select" -> {
 					val arr = JSONArray()
 					when (value) {
 						is Collection<*> -> value.forEach { v ->
-							arr.add(JSONObject().apply { put("name", v.toString()) })
+//							arr.add(JSONObject().apply { put("name", v.toString()) })
+							arr.put(JSONObject().apply { put("name", v.toString()) })
 						}
 
 						is String -> {              // 逗号分隔字符串
 							value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-								.forEach { v -> arr.add(JSONObject().apply { put("name", v) }) }
+//								.forEach { v -> arr.add(JSONObject().apply { put("name", v) }) }
+								.forEach { v -> arr.put(JSONObject().apply { put("name", v) }) }
 						}
 
-						else -> arr.add(JSONObject().apply { put("name", value.toString()) })
+//						else -> arr.add(JSONObject().apply { put("name", value.toString()) })
+						else -> arr.put(JSONObject().apply { put("name", value.toString()) })
+
 					}
-					prop["multi_select"] = arr
+//					prop["multi_select"] = arr
+					prop.put("multi_select", arr)
 				}
 
 				"date" -> {
@@ -397,22 +425,29 @@ class ENotion(
 						is java.time.temporal.TemporalAccessor -> value.toString()
 						else -> value.toString()
 					}
-					prop["date"] = JSONObject().apply { put("start", start) }
+//					prop["date"] = JSONObject().apply { put("start", start) }
+					prop.put("date", JSONObject().apply { put("start", start) })
 				}
 
-				"url" -> prop["url"] = value.toString()
-				"email" -> prop["email"] = value.toString()
-				"phone_number" -> prop["phone_number"] = value.toString()
+//				"url" -> prop["url"] = value.toString()
+				"url" -> prop.put("url", value.toString())
+//				"email" -> prop["email"] = value.toString()
+				"email" -> prop.put("email", value.toString())
+//				"phone_number" -> prop["phone_number"] = value.toString()
+				"phone_number" -> prop.put("phone_number", value.toString())
 				else -> {
 					val textObj = JSONObject().apply { put("content", value.toString()) }
 					val wrapper = JSONObject().apply {
 						put("type", "text")
 						put("text", textObj)
 					}
-					prop["rich_text"] = JSONArray().apply { add(wrapper) }
+//					prop["rich_text"] = JSONArray().apply { add(wrapper) }
+					prop.put("rich_text", JSONArray().apply { put(wrapper) })
+//
 				}
 			}
-			properties[key] = prop
+//			properties[key] = prop
+			properties.put(key, prop)
 		}
 		return properties
 	}
@@ -431,7 +466,7 @@ class ENotion(
 			.build()
 
 		return this.client.newCall(req).execute().use { resp ->
-			if (!resp.isSuccessful) null else JSONObject.fromObject(resp.body?.string())
+			if (!resp.isSuccessful) null else JSONObject(resp.body?.string())
 		}
 	}
 
@@ -478,7 +513,7 @@ class ENotion(
 
 		return client.newCall(pageRequest).execute().use { resp ->
 			if (!resp.isSuccessful) return null
-			JSONObject.fromObject(resp.body?.string())
+			JSONObject(resp.body?.string())
 		}
 	}
 
@@ -520,7 +555,7 @@ class ENotion(
 
 		return client.newCall(patchReq).execute().use { resp ->
 			if (!resp.isSuccessful) return null
-			JSONObject.fromObject(resp.body?.string())
+			JSONObject(resp.body?.string())
 		}
 	}
 }

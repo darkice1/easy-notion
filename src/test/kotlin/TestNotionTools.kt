@@ -1,13 +1,19 @@
-import easy.config.Config
 import easy.notion.ENotion
+import java.io.FileInputStream
+import java.util.*
 
 object TestNotionTools {
 	@JvmStatic
 	fun main(args: Array<String>) {
-		val apikey = Config.getProperty("NOTIONKEY").toString()
-		val databaseid = Config.getProperty("DATABASEID").toString()
+		val prop = Properties().apply {
+			load(FileInputStream("config.properties"))
+		}
+		println(prop)
+
+		val apikey = prop.getProperty("NOTIONKEY").toString()
+		val databaseid = prop.getProperty("DATABASEID").toString()
 		val n = ENotion(apikey)
-//		println(n.getDataBase(databaseid))
+		println(n.getDataBase(databaseid))
 //		println(n.insertRecord(databaseid,"wpid" to "${System.currentTimeMillis()}"))
 		println(
 			n.updateRecord(
