@@ -1,3 +1,16 @@
+/**
+ * Easy‑Notion Kotlin helper (single‑file edition).
+ *
+ * Features:
+ *  * Query a database (`getDataBase`)
+ *  * Insert a record with automatic type conversion (`insertRecord`)
+ *  * Update an existing record (`updateRecord`)
+ *
+ * The class focuses on JSON manipulation via *net.sf.json* and HTTP calls via **OkHttp 4**.
+ * Only a subset of Notion REST API is covered; extend on demand.
+ *
+ * 2025‑05‑05
+ */
 package easy.notion
 
 import net.sf.json.JSONArray
@@ -7,10 +20,26 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
-import kotlin.collections.iterator
-import kotlin.text.removePrefix
+import java.util.concurrent.TimeUnit
 
-class ENotion (val apikey: String) {
+/**
+ * Lightweight wrapper for selected Notion REST API endpoints.
+ *
+ * @property apikey  Integration secret (starts with `secret_...`).
+ * @property client  Injected **OkHttp 4** instance.
+ *                   Defaults to a builder with 60‑second connect / read / write timeouts.
+ *
+ * You may pass a pre‑configured client (e.g., with logging or caching). If omitted,
+ * the default client is created once and reused for all requests.
+ */
+class ENotion(
+	private val apikey: String,
+	private val client: OkHttpClient = OkHttpClient.Builder()
+		.connectTimeout(60, TimeUnit.SECONDS)
+		.readTimeout(60, TimeUnit.SECONDS)
+		.writeTimeout(60, TimeUnit.SECONDS)
+		.build(),
+) {
 	/**
 	 * 渲染富文本数组为 HTML，保留链接并在新窗口打开
 	 */
@@ -38,11 +67,10 @@ class ENotion (val apikey: String) {
 	}
 	/**
 	 * 通用块子项获取
-	 * @param client OkHttpClient 实例
 	 * @param blockId Notion 块 ID
 	 * @return 子块 JSONArray
 	 */
-	private fun fetchBlockChildren(client: OkHttpClient, blockId: String): JSONArray {
+	private fun fetchBlockChildren(blockId: String): JSONArray {
 		val childrenUrl = "https://api.notion.com/v1/blocks/$blockId/children?page_size=100"
 		val request = Request.Builder()
 			.url(childrenUrl)
@@ -50,15 +78,15 @@ class ENotion (val apikey: String) {
 			.addHeader("Notion-Version", "2022-06-28")
 			.get()
 			.build()
-		client.newCall(request).execute().use { response ->
+		this.client.newCall(request).execute().use { response ->
 			if (!response.isSuccessful) throw IOException("Unexpected code $response")
 			val json = JSONObject.fromObject(response.body?.string())
 			return json.getJSONArray("results")
 		}
 	}
 
+	@Suppress("unused")
 	fun getDataBase(databaseId: String): JSONArray {
-		val client = OkHttpClient()
 		val url = "https://api.notion.com/v1/databases/$databaseId/query"
 		val mediaType = "application/json".toMediaTypeOrNull()
 		val body = "{}".toRequestBody(mediaType)
@@ -81,9 +109,10 @@ class ENotion (val apikey: String) {
 				val properties = page.getJSONObject("properties")
 				val item = JSONObject()
 
-				// 添加页面层面的创建和更新时间
-				item.put("created_time", page.getString("created_time"))
-				item.put("last_edited_time", page.getString("last_edited_time"))
+				// 添加页面层面的唯一 ID、创建和更新时间
+				item["id"] = page.getString("id")
+				item["created_time"] = page.getString("created_time")
+				item["last_edited_time"] = page.getString("last_edited_time")
 
 				for (keyAny in properties.keys()) {
 					val key = keyAny as String
@@ -95,9 +124,9 @@ class ENotion (val apikey: String) {
 								val titleText = titleArray.getJSONObject(0)
 									.getJSONObject("text")
 									.getString("content")
-								item.put(key, titleText)
+								item[key] = titleText
 							} else {
-								item.put(key, "")
+								item[key] = ""
 							}
 						}
 
@@ -105,64 +134,64 @@ class ENotion (val apikey: String) {
 							val texts = prop.getJSONArray("rich_text")
 								.map { it as JSONObject }
 								.joinToString("") { it.getJSONObject("text").getString("content") }
-							item.put(key, texts)
+							item[key] = texts
 						}
 
 						"number" -> {
-							item.put(key, prop.get("number"))
+							item[key] = prop.get("number")
 						}
 
 						"checkbox" -> {
-							item.put(key, prop.getBoolean("checkbox"))
+							item[key] = prop.getBoolean("checkbox")
 						}
 
 						"select" -> {
 							val sel = prop.optJSONObject("select")
-							item.put(key, sel?.getString("name") ?: "")
+							item[key] = sel?.getString("name") ?: ""
 						}
 
 						"multi_select" -> {
 							val arr = prop.getJSONArray("multi_select")
 							val names = arr.map { (it as JSONObject).getString("name") }
-							item.put(key, names)
+							item[key] = names
 						}
 
 						"date" -> {
 							val dateObj = prop.optJSONObject("date")
-							item.put(key, dateObj?.getString("start") ?: "")
+							item[key] = dateObj?.getString("start") ?: ""
 						}
 
 						"url" -> {
-							item.put(key, prop.optString("url", ""))
+							item[key] = prop.optString("url", "")
 						}
 
 						"email" -> {
-							item.put(key, prop.optString("email", ""))
+							item[key] = prop.optString("email", "")
 						}
 
 						"phone_number" -> {
-							item.put(key, prop.optString("phone_number", ""))
+							item[key] = prop.optString("phone_number", "")
 						}
 
 						"created_time" -> {
 							// 数据库属性类型为 created_time，直接取属性中的时间戳
-							item.put(key, prop.getString("created_time"))
+							item[key] = prop.getString("created_time")
 						}
 
 						"last_edited_time" -> {
 							// 数据库属性类型为 last_edited_time，直接取属性中的时间戳
-							item.put(key, prop.getString("last_edited_time"))
+							item[key] = prop.getString("last_edited_time")
 						}
 
 						else -> {
 							// 其他类型统一转为字符串
-							item.put(key, prop.toString())
+							item[key] = prop.toString()
 						}
 					}
 				}
 
 				// 获取页面块内容并手动渲染 HTML
-				val blocks = fetchBlockChildren(client, page.getString("id"))
+				val blocks = fetchBlockChildren(page.getString("id"))
 				val htmlBuilder = StringBuilder()
 				var currentListType: String? = null
 
@@ -208,7 +237,7 @@ class ENotion (val apikey: String) {
 						"divider" -> htmlBuilder.append("<hr/>")
 						"image" -> {
 							val imageObj = block.getJSONObject("image")
-							val url = if (imageObj.has("file")) imageObj.getJSONObject("file").getString("url")
+							val purl = if (imageObj.has("file")) imageObj.getJSONObject("file").getString("url")
 							else imageObj.getJSONObject("external").getString("url")
 							val caption = imageObj.optJSONArray("caption")
 								?.joinToString("") { (it as JSONObject).getJSONObject("text").getString("content") }
@@ -220,14 +249,14 @@ class ENotion (val apikey: String) {
 							val styleSb = StringBuilder()
 							if (bw > 0) styleSb.append("width:").append(bw.toInt()).append("px;")
 							if (bh > 0) styleSb.append("height:").append(bh.toInt()).append("px;")
-							htmlBuilder.append("<img src=\"").append(url)
+							htmlBuilder.append("<img src=\"").append(purl)
 								.append("\" alt=\"").append(caption.replace("\"", "&quot;"))
 								.append("\" decoding=\"async\"")
 							if (styleSb.isNotEmpty()) htmlBuilder.append(" style=\"").append(styleSb).append("\"")
 							htmlBuilder.append("/>")
 						}
 						"table" -> {
-							val rows = fetchBlockChildren(client, block.getString("id"))
+							val rows = fetchBlockChildren(block.getString("id"))
 							val tblFmt = block.optJSONObject("format")
 							val bw = tblFmt?.optDouble("block_width", -1.0) ?: -1.0
 							val tableStyle = if (bw > 0) " style=\"width:${bw.toInt()}px;\"" else ""
@@ -283,7 +312,7 @@ class ENotion (val apikey: String) {
 					htmlBuilder.insert(0, styleTag)
 				}
 //				println(htmlBuilder.toString())
-				item.put("content", htmlBuilder.toString())
+				item["content"] = htmlBuilder.toString()
 
 				output.add(item)
 			}
@@ -291,5 +320,207 @@ class ENotion (val apikey: String) {
 			return output
 		}
 
+	}
+
+	/**
+	 * 根据数据库 schema 与列值列表构造 Notion properties JSON，并在必要时自动尝试类型转换
+	 * （例如 `"1" → number、true → 1、"foo,bar" → multi‑select 等）。
+	 */
+	private fun buildProperties(
+		schemaProps: JSONObject,
+		fields: Array<out Pair<String, Any?>>,
+	): JSONObject {
+		val properties = JSONObject()
+		for ((key, value) in fields) {
+			if (!schemaProps.has(key)) continue
+			val schema = schemaProps.getJSONObject(key)
+			val type = schema.getString("type")
+			val prop = JSONObject()
+			when (type) {
+				"title", "rich_text" -> {
+					val textObj = JSONObject().apply { put("content", value.toString()) }
+					val wrapper = JSONObject().apply {
+						put("type", "text")
+						put("text", textObj)
+					}
+					prop[type] = JSONArray().apply { add(wrapper) }
+				}
+
+				"number" -> {
+					val num: Number? = when (value) {
+						is Number -> value
+						is String -> value.toDoubleOrNull()
+						is Boolean -> if (value) 1 else 0
+						else -> null
+					}
+					if (num != null) prop["number"] = num else continue    // 若无法转换则跳过
+				}
+
+				"checkbox" -> {
+					val bool: Boolean = when (value) {
+						is Boolean -> value
+						is String -> value.equals("true", true) || value == "1"
+						is Number -> value.toInt() != 0
+						else -> false
+					}
+					prop["checkbox"] = bool
+				}
+
+				"select" -> {
+					val name = when (value) {
+						is String -> value
+						else -> value.toString()
+					}
+					prop["select"] = JSONObject().apply { put("name", name) }
+				}
+
+				"multi_select" -> {
+					val arr = JSONArray()
+					when (value) {
+						is Collection<*> -> value.forEach { v ->
+							arr.add(JSONObject().apply { put("name", v.toString()) })
+						}
+
+						is String -> {              // 逗号分隔字符串
+							value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+								.forEach { v -> arr.add(JSONObject().apply { put("name", v) }) }
+						}
+
+						else -> arr.add(JSONObject().apply { put("name", value.toString()) })
+					}
+					prop["multi_select"] = arr
+				}
+
+				"date" -> {
+					// 支持字符串日期或 java.time.* 类型
+					val start = when (value) {
+						is java.time.temporal.TemporalAccessor -> value.toString()
+						else -> value.toString()
+					}
+					prop["date"] = JSONObject().apply { put("start", start) }
+				}
+
+				"url" -> prop["url"] = value.toString()
+				"email" -> prop["email"] = value.toString()
+				"phone_number" -> prop["phone_number"] = value.toString()
+				else -> {
+					val textObj = JSONObject().apply { put("content", value.toString()) }
+					val wrapper = JSONObject().apply {
+						put("type", "text")
+						put("text", textObj)
+					}
+					prop["rich_text"] = JSONArray().apply { add(wrapper) }
+				}
+			}
+			properties[key] = prop
+		}
+		return properties
+	}
+
+	/**
+	 * 从 Notion 获取数据库元数据（schema）。
+	 *
+	 * @return 若请求成功返回完整 JSON；失败返回 `null`
+	 */
+	private fun fetchDatabaseSchema(databaseId: String): JSONObject? {
+		val req = Request.Builder()
+			.url("https://api.notion.com/v1/databases/$databaseId")
+			.addHeader("Authorization", "Bearer $apikey")
+			.addHeader("Notion-Version", "2022-06-28")
+			.get()
+			.build()
+
+		return this.client.newCall(req).execute().use { resp ->
+			if (!resp.isSuccessful) null else JSONObject.fromObject(resp.body?.string())
+		}
+	}
+
+	/**
+	 * 向指定 Notion 数据库插入一条记录
+	 *
+	 * 1. 通过可变参数 `fields` 直接传入列名-值对，免去手动构造 `Map`。
+	 * 2. 若数据库 ID 不存在，方法返回 `null`，不会执行写入。
+	 * 3. 写入时会先读取数据库属性 schema，并依据列的「实际类型」自动转换为正确的 Notion 属性结构。
+	 * 4. 对不匹配的类型自动做“尽可能合理”的转换（见 `buildProperties`）。
+	 *
+	 * @param databaseId 目标数据库 ID
+	 * @param fields     形如 `"Name" to "Foo", "Score" to 99` 的可变参数
+	 * @return 若插入成功，返回 Notion 返回的页面 JSON；否则返回 `null`
+	 */
+	@Suppress("unused")
+	fun insertRecord(
+		databaseId: String,
+		vararg fields: Pair<String, Any?>,
+	): JSONObject? {
+
+		/* ---------- 检查数据库是否存在并获取 schema ---------- */
+		val dbJson = fetchDatabaseSchema(databaseId) ?: return null
+		val schemaProps = dbJson.getJSONObject("properties")
+
+		/* ---------- 组装 properties ---------- */
+		val properties = buildProperties(schemaProps, fields)
+		if (properties.isEmpty) return null   // 没有可写入的数据
+
+		/* ---------- 构建请求 ---------- */
+		val root = JSONObject().apply {
+			put("parent", JSONObject().apply { put("database_id", databaseId) })
+			put("properties", properties)
+		}
+
+		val body = root.toString().toRequestBody("application/json".toMediaTypeOrNull())
+
+		val pageRequest = Request.Builder()
+			.url("https://api.notion.com/v1/pages")
+			.addHeader("Authorization", "Bearer $apikey")
+			.addHeader("Notion-Version", "2022-06-28")
+			.post(body)
+			.build()
+
+		return client.newCall(pageRequest).execute().use { resp ->
+			if (!resp.isSuccessful) return null
+			JSONObject.fromObject(resp.body?.string())
+		}
+	}
+
+	/**
+	 * 更新指定页面的列内容
+	 *
+	 * @param databaseId 所在数据库 ID
+	 * @param pageId     目标页面 ID
+	 * @param fields     待更新的列及新值
+	 * @return 更新成功返回页面 JSON；否则返回 null
+	 *
+	 * 类型转换规则与 `insertRecord` 一致。
+	 */
+	fun updateRecord(
+		databaseId: String,
+		pageId: String,
+		vararg fields: Pair<String, Any?>,
+	): JSONObject? {
+
+		// 获取 schema
+		val dbJson = fetchDatabaseSchema(databaseId) ?: return null
+		val schemaProps = dbJson.getJSONObject("properties")
+//	    println("schemaProps: $schemaProps")
+		// 构造 properties
+		val properties = buildProperties(schemaProps, fields)
+//	    println("properties: $properties")
+
+		if (properties.isEmpty) return null
+
+		val root = JSONObject().apply { put("properties", properties) }
+		val body = root.toString().toRequestBody("application/json".toMediaTypeOrNull())
+
+		val patchReq = Request.Builder()
+			.url("https://api.notion.com/v1/pages/$pageId")
+			.addHeader("Authorization", "Bearer $apikey")
+			.addHeader("Notion-Version", "2022-06-28")
+			.patch(body)
+			.build()
+
+		return client.newCall(patchReq).execute().use { resp ->
+			if (!resp.isSuccessful) return null
+			JSONObject.fromObject(resp.body?.string())
+		}
 	}
 }

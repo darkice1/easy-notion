@@ -15,7 +15,7 @@ version = "0.0.1"
 
 val projectName = "easy-notion"
 val projectDesc = "Neo easy Notion SDK."
-val repoName = "easy-notion"
+val repoName = projectName
 
 // -------- Java toolchain & JAR 附件 --------
 java {
