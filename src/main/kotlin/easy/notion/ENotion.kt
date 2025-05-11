@@ -40,6 +40,12 @@ class ENotion(
 		.writeTimeout(60, TimeUnit.SECONDS)
 		.build(),
 ) {
+	/** Returns a Request.Builder pre‑configured with common Notion headers. */
+	private fun requestBuilder(url: String): Request.Builder =
+		Request.Builder()
+			.url(url)
+			.addHeader("Authorization", "Bearer $apikey")
+			.addHeader("Notion-Version", "2022-06-28")
 	/**
 	 * 渲染富文本数组为 HTML，保留链接并在新窗口打开
 	 */
@@ -72,10 +78,7 @@ class ENotion(
 	 */
 	private fun fetchBlockChildren(blockId: String): JSONArray {
 		val childrenUrl = "https://api.notion.com/v1/blocks/$blockId/children?page_size=100"
-		val request = Request.Builder()
-			.url(childrenUrl)
-			.addHeader("Authorization", "Bearer $apikey")
-			.addHeader("Notion-Version", "2022-06-28")
+		val request = requestBuilder(childrenUrl)
 			.get()
 			.build()
 		this.client.newCall(request).execute().use { response ->
@@ -86,15 +89,23 @@ class ENotion(
 	}
 
 	@Suppress("unused")
-	fun getDataBase(databaseId: String): JSONArray {
+	fun getDataBase(
+		databaseId: String,
+		pageSize: Int = 100,
+		filter: JSONObject? = null,
+		sorts: JSONArray? = null,
+	): JSONArray {
 		val url = "https://api.notion.com/v1/databases/$databaseId/query"
 		val mediaType = "application/json".toMediaTypeOrNull()
-		val body = "{}".toRequestBody(mediaType)
+		// Assemble request payload with optional paging, filter and sorting
+		val payload = JSONObject().apply {
+			put("page_size", pageSize)
+			if (filter != null) put("filter", filter)
+			if (sorts != null) put("sorts", sorts)
+		}
+		val body = payload.toString().toRequestBody(mediaType)
 
-		val request = Request.Builder()
-			.url(url)
-			.addHeader("Authorization", "Bearer $apikey")
-			.addHeader("Notion-Version", "2022-06-28")
+		val request = requestBuilder(url)
 			.post(body)
 			.build()
 
@@ -458,10 +469,7 @@ class ENotion(
 	 * @return 若请求成功返回完整 JSON；失败返回 `null`
 	 */
 	private fun fetchDatabaseSchema(databaseId: String): JSONObject? {
-		val req = Request.Builder()
-			.url("https://api.notion.com/v1/databases/$databaseId")
-			.addHeader("Authorization", "Bearer $apikey")
-			.addHeader("Notion-Version", "2022-06-28")
+		val req = requestBuilder("https://api.notion.com/v1/databases/$databaseId")
 			.get()
 			.build()
 
@@ -504,10 +512,7 @@ class ENotion(
 
 		val body = root.toString().toRequestBody("application/json".toMediaTypeOrNull())
 
-		val pageRequest = Request.Builder()
-			.url("https://api.notion.com/v1/pages")
-			.addHeader("Authorization", "Bearer $apikey")
-			.addHeader("Notion-Version", "2022-06-28")
+		val pageRequest = requestBuilder("https://api.notion.com/v1/pages")
 			.post(body)
 			.build()
 
@@ -527,6 +532,7 @@ class ENotion(
 	 *
 	 * 类型转换规则与 `insertRecord` 一致。
 	 */
+	@Suppress("unused")
 	fun updateRecord(
 		databaseId: String,
 		pageId: String,
@@ -546,10 +552,7 @@ class ENotion(
 		val root = JSONObject().apply { put("properties", properties) }
 		val body = root.toString().toRequestBody("application/json".toMediaTypeOrNull())
 
-		val patchReq = Request.Builder()
-			.url("https://api.notion.com/v1/pages/$pageId")
-			.addHeader("Authorization", "Bearer $apikey")
-			.addHeader("Notion-Version", "2022-06-28")
+		val patchReq = requestBuilder("https://api.notion.com/v1/pages/$pageId")
 			.patch(body)
 			.build()
 

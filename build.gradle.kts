@@ -5,17 +5,16 @@ plugins {
 	`java-library`
 	id("io.github.gradle-nexus.publish-plugin") version "1.3.0"
 	`maven-publish`
-	signing                               // Gradle 自带插件
+	signing
 }
 
 group = "com.github.darkice1"
-version = "0.0.1"
+version = "0.0.2"
 
 val projectName = "easy-notion"
 val projectDesc = "Neo easy Notion SDK."
 val repoName = projectName
 
-// -------- Java toolchain & JAR 附件 --------
 java {
 	toolchain {
 		languageVersion.set(JavaLanguageVersion.of(21))
@@ -30,23 +29,20 @@ repositories {
 	mavenLocal()
 }
 
-// -------- 依赖 --------
 dependencies {
-	implementation("com.squareup.okhttp3:okhttp:4.12.0")
-	implementation("org.json:json:20250107")
+	api("com.squareup.okhttp3:okhttp:4.12.0")
+	api("org.json:json:20250107")
 
-	implementation(kotlin("stdlib"))
+	api(kotlin("stdlib"))
 	testImplementation(kotlin("test"))
 }
 
-// -------- Kotlin 编译选项 --------
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
 	compilerOptions {
 		jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
 	}
 }
 
-// -------- Javadoc 选项 --------
 tasks.withType<Javadoc>().configureEach {
 	(options as StandardJavadocDocletOptions).apply {
 		encoding = "UTF-8"
@@ -55,7 +51,6 @@ tasks.withType<Javadoc>().configureEach {
 	}
 }
 
-// -------- 发布到 OSSRH --------
 publishing {
 	publications {
 		create<MavenPublication>("mavenJava") {
@@ -89,7 +84,6 @@ publishing {
 	}
 }
 
-// -------- GPG 签名 --------
 signing {
 	// 1) CI 推荐：gradle.properties / 环境变量注入 ASCII 私钥
 	val inMemKey: String? = providers.gradleProperty("signingKey").orNull
@@ -97,13 +91,13 @@ signing {
 
 	when {
 		inMemKey != null && inMemPwd != null -> useInMemoryPgpKeys(inMemKey, inMemPwd)
-		// 2) 本地直接调用 gpg 命令
 		else -> useGpgCmd()
 	}
 
 	sign(publishing.publications["mavenJava"])
 }
 
+val coords = "${project.group}:$projectName:$version"
 tasks.register("publishAndCloseSonatype") {
 	group = "mypublishing"
 	description =
@@ -111,7 +105,7 @@ tasks.register("publishAndCloseSonatype") {
 	dependsOn("publishToSonatype", "closeSonatypeStagingRepository")
 //	finalizedBy("closeSonatypeStagingRepository")   // 上传完成后再执行 close
 	doLast {
-		println("close:[${project.group}:$projectName:$version]")
+		println("close:[$coords]")
 	}
 }
 
@@ -120,7 +114,7 @@ tasks.register("publiclocal") {
 	description = "Close & release Sonatype staging repo, then print coordinates."
 	dependsOn("publishMavenJavaPublicationToMavenLocal")
 	doLast {
-		println("public local:[${project.group}:${project.name}:${project.version}]")
+		println("public local:[$coords]")
 	}
 }
 
@@ -129,7 +123,7 @@ tasks.register("release") {
 	description = "Close & release Sonatype staging repo, then print coordinates."
 	dependsOn("publishToSonatype", "closeAndReleaseSonatypeStagingRepository")
 	doLast {
-		println("release:[${project.group}:${project.name}:${project.version}]")
+		println("release:[$coords]")
 	}
 }
 
@@ -141,7 +135,5 @@ nexusPublishing {
 			username.set(providers.gradleProperty("centralUsername"))
 			password.set(providers.gradleProperty("centralPassword"))
 		}
-//		repositoryDescription = "$group:$projectName:$version"
-//		description = "$group:$projectName:$version"
 	}
 }
