@@ -15,9 +15,13 @@ object TestNotionTools {
 		val apikey = prop.getProperty("NOTIONKEY").toString()
 		val databaseid = prop.getProperty("DATABASEID").toString()
 		val n = ENotion(apikey)
+		/*		val filter = JSONObject().apply {
+					put("property", "wpid")
+					put("number", JSONObject().put("is_empty", true))   // 数字列用 number.is_empty
+				}*/
 		val filter = JSONObject().apply {
 			put("property", "wpid")
-			put("number", JSONObject().put("is_empty", true))   // 数字列用 number.is_empty
+			put("number", JSONObject().put("equals", 237))   // 数字列用 number.is_empty
 		}
 
 		val sorts = JSONArray().apply {
@@ -28,7 +32,11 @@ object TestNotionTools {
 		}
 
 		val pages = n.getDataBase(databaseid, filter = filter, sorts = sorts)
-		println(pages)
+		pages.forEach { p ->
+			val j = p as JSONObject
+			println(j.getString("content"))
+		}
+//		println(pages)
 //		println(n.insertRecord(databaseid,"wpid" to "${System.currentTimeMillis()}"))
 //		println(
 //			n.updateRecord(

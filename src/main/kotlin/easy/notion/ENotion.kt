@@ -46,29 +46,68 @@ class ENotion(
 			.url(url)
 			.addHeader("Authorization", "Bearer $apikey")
 			.addHeader("Notion-Version", "2022-06-28")
+
 	/**
-	 * 渲染富文本数组为 HTML，保留链接并在新窗口打开
+	 * Render a Notion rich‑text array to HTML.
+	 *
+	 * Supported annotations and formats (complete as of Notion 2024‑10‑23):
+	 * • bold, italic, underline, strikethrough, inline code
+	 * • foreground colours (e.g. "red") and background colours (e.g. "red_background")
+	 * • hyperlinks (always open in new tab)
+	 * • non‑text rich‑text types (mention / equation) fall back to their `plain_text`
+	 *
+	 * Extend easily when Notion ships new annotations: just add another wrapper
+	 * before the colour block.
 	 */
 	private fun renderRichText(richArray: JSONArray): String {
 		val sb = StringBuilder()
+
 		for (i in 0 until richArray.length()) {
 			val obj = richArray.getJSONObject(i)
-			val textObj = obj.getJSONObject("text")
-			val content = textObj.getString("content")
-			val link = textObj.optJSONObject("link")
+
+			/* ---------- extract raw text + link (if any) ---------- */
+			val type = obj.getString("type")
+			val (rawContent: String, linkJson: JSONObject?) = when (type) {
+				"text" -> {
+					val textObj = obj.getJSONObject("text")
+					textObj.getString("content") to textObj.optJSONObject("link")
+				}
+
+				else -> obj.getString("plain_text") to null       // mention / equation / etc.
+			}
+
+			/* ---------- apply annotations inside‑out ---------- */
 			val ann = obj.getJSONObject("annotations")
-			val inlineCode = ann.optBoolean("code", false)
-			if (link != null && link.has("url")) {
-				val url = link.getString("url")
+			var formatted = rawContent
+
+			if (ann.optBoolean("code")) formatted = "<code>$formatted</code>"
+			if (ann.optBoolean("bold")) formatted = "<strong>$formatted</strong>"
+			if (ann.optBoolean("italic")) formatted = "<em>$formatted</em>"
+			if (ann.optBoolean("underline")) formatted = "<u>$formatted</u>"
+			if (ann.optBoolean("strikethrough")) formatted = "<del>$formatted</del>"
+
+			/* ---------- colour (foreground or background) ---------- */
+			val color = ann.optString("color", "default")
+			if (color != "default") {
+				formatted =
+					if (color.endsWith("_background")) {
+						val bg = color.removeSuffix("_background")
+						"<span style=\"background-color:$bg;\">$formatted</span>"
+					} else {
+						"<span style=\"color:$color;\">$formatted</span>"
+					}
+			}
+
+			/* ---------- hyperlink wrapper ---------- */
+			if (linkJson != null && linkJson.has("url")) {
+				val url = linkJson.getString("url")
 				sb.append("<a href=\"").append(url).append("\" target=\"_blank\">")
-				if (inlineCode) sb.append("<code>").append(content).append("</code>")
-				else sb.append(content)
-				sb.append("</a>")
+					.append(formatted).append("</a>")
 			} else {
-				if (inlineCode) sb.append("<code>").append(content).append("</code>")
-				else sb.append(content)
+				sb.append(formatted)
 			}
 		}
+
 		return sb.toString()
 	}
 	/**
