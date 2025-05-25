@@ -4,18 +4,33 @@
 
 ## Features
 
-- **Supported Notion Block Types**:
-    - Paragraph (`paragraph`)
-    - Headings (`heading_1`, `heading_2`, `heading_3`)
-    - List Items (`bulleted_list_item`, `numbered_list_item`)
-    - Divider (`divider`)
-    - Image (`image`)
-    - Table (`table`)
+- **Database Query** – `getDataBase`  
+  Query any Notion database with optional *filter* and *sorts*.  
+  Each page is returned as a JSON object whose `content` field already contains fully‑rendered HTML for all supported
+  block types.
 
-- **HTML Output**:
-    - Automatically generates HTML tags (e.g., `<p>`, `<h1>`, `<ul>`, `<table>`, etc.).
-    - Supports style customization (e.g., image dimensions, table width).
-    - Built-in stylesheet for basic styling.
+- **Record Insertion** – `insertRecord`  
+  Insert a row into a database while automatically converting Kotlin/SQL values to the correct Notion property
+  structure.
+
+- **Record Update** – `updateRecord`  
+  Patch one or more columns of an existing page with the same automatic type handling as *insertRecord*.
+
+- **Workspace Search** – `findNotionDatabase`  
+  Locate a database by its exact title and return its ID.
+
+- **Database Creation** – `createNotionDatabase`  
+  Programmatically create a brand‑new database with a custom schema under any parent page.
+
+- **Schema Management** – `ensureDatabaseSchema`  
+  Compare the remote schema with local column definitions and add any missing properties on‑the‑fly.
+
+- **Timestamp Helper** – `getLatestTimestamp`  
+  Quickly obtain the newest ISO date stored in a designated *date* column (useful for incremental sync).
+
+- **Miscellaneous Utilities**  
+  Helpers for reading a database’s `properties` object, mapping SQL types to Notion types, and extracting primitive
+  values from Notion properties.
 
 ## Usage
 
@@ -31,6 +46,57 @@ fun main() {
     val notion = ENotion(Config.getProperty("NOTIONKEY").toString())
     println(notion.getDataBase("your_database_id"))
 }
+```
+
+### Searching for a database
+
+```kotlin
+val dbId = notion.findNotionDatabase("My Tasks")
+if (dbId == null) println("Database not found") else println("ID = $dbId")
+```
+
+### Creating a database
+
+```kotlin
+val newDbId = notion.createNotionDatabase(
+    pageId = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",          // parent page
+    databaseName = "Log Entries",
+    columns = mapOf("Level" to "select", "Message" to "rich_text"),
+    timeField = "Created",
+    primaryKey = "ID",
+)
+```
+
+### Inserting and updating records
+
+```kotlin
+// insert
+notion.insertRecord(
+    databaseId = newDbId!!,
+    "ID"      to "42",
+    "Level"   to "INFO",
+    "Message" to "Application started",
+    "Created" to "2025-05-25 10:00:00",
+)
+
+// update
+notion.updateRecord(
+    databaseId = newDbId,
+    pageId     = "pppppppppppppppppppppppppppppppp",
+    "Level"    to "ERROR",
+    "Message"  to "Oops, something went wrong",
+)
+```
+
+### Ensuring schema matches local columns
+
+```kotlin
+val ok = notion.ensureDatabaseSchema(
+    databaseId   = newDbId,
+    localColumns = mapOf("ID" to "VARCHAR", "Level" to "VARCHAR", "Detail" to "TEXT"),
+    timeField    = "Created",
+    primaryKey   = "ID",
+)
 ```
 
 ### Output Example
@@ -71,6 +137,9 @@ Convert Notion database content to HTML:
 </table>
 ```
 
+The library automatically prepends a lightweight default stylesheet (visible in the snippet above) so the HTML is ready
+for direct embedding.
+
 ## Configuration
 
 Create a `config.txt` file in the project root directory and add the following content:
@@ -82,7 +151,9 @@ NOTIONKEY=your_notion_api_key
 ## Dependencies
 
 - **Language**: Kotlin
-- **Build Tool**: Maven
+- **HTTP**: OkHttp 4.x
+- **JSON**: org.json
+- **Build Tool**: Maven (or Gradle)
 
 ## Development and Testing
 

@@ -1,6 +1,4 @@
 import easy.notion.ENotion
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.FileInputStream
 import java.util.*
 
@@ -19,23 +17,25 @@ object TestNotionTools {
 					put("property", "wpid")
 					put("number", JSONObject().put("is_empty", true))   // 数字列用 number.is_empty
 				}*/
-		val filter = JSONObject().apply {
-			put("property", "wpid")
-			put("number", JSONObject().put("equals", 237))   // 数字列用 number.is_empty
-		}
+		/*	val filter = JSONObject().apply {
+				put("property", "wpid")
+				put("number", JSONObject().put("equals", 237))   // 数字列用 number.is_empty
+			}
 
-		val sorts = JSONArray().apply {
-			put(JSONObject().apply {
-				put("timestamp", "last_edited_time")  // 系统时间戳排序
-				put("direction", "descending")
-			})
-		}
+			val sorts = JSONArray().apply {
+				put(JSONObject().apply {
+					put("timestamp", "last_edited_time")  // 系统时间戳排序
+					put("direction", "descending")
+				})
+			}
 
-		val pages = n.getDataBase(databaseid, filter = filter, sorts = sorts)
-		pages.forEach { p ->
-			val j = p as JSONObject
-			println(j.getString("content"))
-		}
+			val pages = n.getDataBase(databaseid, filter = filter, sorts = sorts)
+			pages.forEach { p ->
+				val j = p as JSONObject
+				println(j.getString("content"))
+			}*/
+
+		println(n.findNotionDatabase("Neo-WordPress"))
 //		println(pages)
 //		println(n.insertRecord(databaseid,"wpid" to "${System.currentTimeMillis()}"))
 //		println(

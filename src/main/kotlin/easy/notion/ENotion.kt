@@ -20,6 +20,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 
 /**
@@ -518,6 +520,152 @@ class ENotion(
 	}
 
 	/**
+	 * Search the current workspace for a Notion database whose title exactly matches
+	 * [databaseName] and return its database ID.
+	 *
+	 * Internally uses the `/v1/search` endpoint with a filter limited to `database` objects.
+	 * Returns `null` if no exact‑matching database is found.
+	 *
+	 * @param databaseName The title of the database to locate (case‑sensitive exact match).
+	 * @return The database ID (`String`) if found; otherwise `null`.
+	 */
+	@Suppress("unused")
+	fun findNotionDatabase(databaseName: String): String? {
+		val searchUrl = "https://api.notion.com/v1/search"
+		val payload = JSONObject().apply {
+			put("query", databaseName)
+			put(
+				"filter",
+				JSONObject().apply {
+					put("value", "database")
+					put("property", "object")
+				},
+			)
+			put("page_size", 25)
+		}
+
+		val body = payload
+			.toString()
+			.toRequestBody("application/json".toMediaTypeOrNull())
+
+		val request = requestBuilder(searchUrl)
+			.post(body)
+			.build()
+
+		this.client.newCall(request).execute().use { response ->
+			if (!response.isSuccessful) throw IOException("Unexpected code $response")
+			val json = JSONObject(response.body?.string())
+			val results = json.getJSONArray("results")
+
+			for (i in 0 until results.length()) {
+				val db = results.getJSONObject(i)
+				val titleArr = db.getJSONArray("title")
+				if (!titleArr.isEmpty) {
+					val name = titleArr
+						.getJSONObject(0)
+						.getJSONObject("text")
+						.getString("content")
+					if (name == databaseName) {
+						return db.getString("id")
+					}
+				}
+			}
+			return null
+		}
+	}
+
+	/**
+	 * Create a brand‑new Notion database under a parent page.
+	 *
+	 * @param pageId        ID of the parent page that will hold the new database.
+	 * @param databaseName  The name (title) of the database.
+	 * @param columns       Map of column names to Notion property types
+	 *                      (valid types: title, rich_text, number, select,
+	 *                       multi_select, checkbox, date, url, email, phone_number).
+	 * @param timeField     Column that should be forced to `date` type and typically
+	 *                      used to store event timestamps (e.g. "Created").
+	 * @param primaryKey    Column that should be forced to `title` type (Notion
+	 *                      requires at least one title property).
+	 * @return Newly‑created database ID, or `null` if the API call fails.
+	 *
+	 * Note: If `columns` already contains the `timeField` or `primaryKey`, their
+	 *       requested types will be overridden to `date` and `title` respectively.
+	 *       Additional property configuration (options for select / multi‑select,
+	 *       number format, etc.) can be added on demand.
+	 */
+	@Suppress("unused")
+	fun createNotionDatabase(
+		pageId: String,
+		databaseName: String,
+		columns: Map<String, String>,
+		timeField: String,
+		primaryKey: String,
+	): String? {
+		/* ---------- assemble property definitions ---------- */
+		val props = JSONObject()
+
+		fun putProperty(name: String, type: String) {
+			val prop = JSONObject()
+			when (type) {
+				"title" -> prop.put("title", JSONObject())
+				"rich_text" -> prop.put("rich_text", JSONObject())
+				"number" -> prop.put("number", JSONObject())
+				"select" -> prop.put("select", JSONObject())
+				"multi_select" -> prop.put("multi_select", JSONObject())
+				"checkbox" -> prop.put("checkbox", JSONObject())
+				"date" -> prop.put("date", JSONObject())
+				"url" -> prop.put("url", JSONObject())
+				"email" -> prop.put("email", JSONObject())
+				"phone_number" -> prop.put("phone_number", JSONObject())
+				else -> prop.put("rich_text", JSONObject())
+			}
+			props.put(name, prop)
+		}
+
+		// user‑defined columns
+		for ((name, type) in columns) {
+			putProperty(name, type)
+		}
+
+		// enforce primaryKey as title
+		putProperty(primaryKey, "title")
+
+		// enforce timeField as date
+		putProperty(timeField, "date")
+
+		/* ---------- build request body ---------- */
+		val root = JSONObject().apply {
+			put("parent", JSONObject().apply { put("page_id", pageId) })
+			put(
+				"title",
+				JSONArray().apply {
+					put(
+						JSONObject().apply {
+							put("type", "text")
+							put("text", JSONObject().apply { put("content", databaseName) })
+						},
+					)
+				},
+			)
+			put("properties", props)
+		}
+
+		val body = root
+			.toString()
+			.toRequestBody("application/json".toMediaTypeOrNull())
+
+		val req = requestBuilder("https://api.notion.com/v1/databases")
+			.post(body)
+			.build()
+
+		this.client.newCall(req).execute().use { resp ->
+			if (!resp.isSuccessful) return null
+			val json = JSONObject(resp.body?.string())
+			return json.optString("id", null)
+		}
+	}
+
+	/**
 	 * 向指定 Notion 数据库插入一条记录
 	 *
 	 * 1. 通过可变参数 `fields` 直接传入列名-值对，免去手动构造 `Map`。
@@ -598,6 +746,164 @@ class ENotion(
 		return client.newCall(patchReq).execute().use { resp ->
 			if (!resp.isSuccessful) return null
 			JSONObject(resp.body?.string())
+		}
+	}
+	/* --------------------------------------------------------------------
+	 *  Convenience helpers extracted from NotionSyncService
+	 * ------------------------------------------------------------------ */
+
+	/** Map a JDBC/SQL column type to a Notion property type. */
+	private fun mapSqlTypeToNotionType(
+		sqlType: String,
+		columnName: String,
+		timeField: String,
+		primaryKey: String,
+	): String {
+		if (columnName == primaryKey) return "title"
+		if (columnName == timeField) return "date"
+		val t = sqlType.uppercase()
+		return if (t.contains("INT") || t.contains("DECIMAL") ||
+			t.contains("NUMERIC") || t.contains("FLOAT")
+		) "number" else "rich_text"
+	}
+
+	/** Return the *properties* object of a Notion database, or `null` on error. */
+	fun getDatabaseProperties(databaseId: String): JSONObject? {
+		val req = requestBuilder("https://api.notion.com/v1/databases/$databaseId")
+			.get()
+			.build()
+		return client.newCall(req).execute().use { resp ->
+			if (!resp.isSuccessful) null
+			else JSONObject(resp.body?.string()).getJSONObject("properties")
+		}
+	}
+
+	/**
+	 * Ensure the remote database schema contains every column in [localColumns].
+	 * Missing columns are added with a minimal definition that matches their
+	 * mapped Notion type. Returns *true* when the schema is already up‑to‑date
+	 * or when the PATCH succeeds.
+	 */
+	@Suppress("unused")
+	fun ensureDatabaseSchema(
+		databaseId: String,
+		localColumns: Map<String, String>,
+		timeField: String,
+		primaryKey: String,
+	): Boolean {
+		val currentProps = getDatabaseProperties(databaseId) ?: return false
+		val newProps = JSONObject()
+
+		for ((name, sqlType) in localColumns) {
+			if (name == primaryKey) continue
+			if (!currentProps.has(name)) {
+				when (mapSqlTypeToNotionType(sqlType, name, timeField, primaryKey)) {
+					"date" -> newProps.put(name, JSONObject().put("date", JSONObject()))
+					"number" -> newProps.put(name, JSONObject().put("number", JSONObject()))
+					else -> newProps.put(name, JSONObject().put("rich_text", JSONObject()))
+				}
+			}
+		}
+		if (newProps.length() == 0) return true   // nothing to do
+
+		val body = JSONObject().put("properties", newProps)
+			.toString()
+			.toRequestBody("application/json".toMediaTypeOrNull())
+
+		val req = requestBuilder("https://api.notion.com/v1/databases/$databaseId")
+			.patch(body)
+			.build()
+
+		client.newCall(req).execute().use { resp -> return resp.isSuccessful }
+	}
+
+	/** Latest value of [timeField] in MySQL `yyyy-MM-dd HH:mm:ss` format, or `null` when empty. */
+	@Suppress("unused")
+	fun getLatestTimestamp(databaseId: String, timeField: String): String? {
+		val payload = JSONObject().apply {
+			put("sorts", JSONArray().put(JSONObject().apply {
+				put("property", timeField)
+				put("direction", "descending")
+			}))
+			put("page_size", 1)
+		}
+		val body = payload.toString().toRequestBody("application/json".toMediaTypeOrNull())
+
+		val req = requestBuilder("https://api.notion.com/v1/databases/$databaseId/query")
+			.post(body)
+			.build()
+
+		client.newCall(req).execute().use { resp ->
+			if (!resp.isSuccessful) return null
+			val results = JSONObject(resp.body?.string()).getJSONArray("results")
+			if (results.length() == 0) return null
+
+			val props = results.getJSONObject(0).getJSONObject("properties")
+			val dateObj = props.optJSONObject(timeField)?.optJSONObject("date") ?: return null
+			val iso = dateObj.getString("start")
+			val odt = OffsetDateTime.parse(iso)
+			return odt.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+		}
+	}
+
+	/** Extract the comparable string value from a Notion property. */
+	@Suppress("unused")
+	fun extractValueFromProperty(property: JSONObject, notionType: String): String? = when (notionType) {
+		"title" -> property.optJSONArray("title")?.optJSONObject(0)
+			?.optJSONObject("text")?.optString("content")
+
+		"rich_text" -> property.optJSONArray("rich_text")?.optJSONObject(0)
+			?.optJSONObject("text")?.optString("content")
+
+		"date" -> property.optJSONObject("date")?.optString("start")
+		"number" -> property.opt("number")?.toString()
+		"select" -> property.optJSONObject("select")?.optString("name")
+		else -> null
+	}
+
+	/**
+	 * Locate a page whose [primaryKey] equals [primaryKeyValue].
+	 * Returns the page JSON or `null` when not found.
+	 */
+	@Suppress("unused")
+	fun findPageByPrimaryKey(
+		databaseId: String,
+		primaryKey: String,
+		primaryKeyValue: String,
+	): JSONObject? {
+		val props = getDatabaseProperties(databaseId) ?: return null
+		val primaryProp = props.optJSONObject(primaryKey) ?: return null
+		val type = primaryProp.optString("type", "rich_text")
+
+		val filter = JSONObject().apply {
+			put("property", primaryKey)
+			when (type) {
+				"title" -> put("title", JSONObject().put("equals", primaryKeyValue))
+				"rich_text" -> put("rich_text", JSONObject().put("equals", primaryKeyValue))
+				"number" -> {
+					val n = primaryKeyValue.toDoubleOrNull()
+					put("number", JSONObject().put("equals", n ?: primaryKeyValue))
+				}
+
+				"select" -> put("select", JSONObject().put("equals", primaryKeyValue))
+				else -> put("rich_text", JSONObject().put("equals", primaryKeyValue))
+			}
+		}
+
+		val payload = JSONObject().apply {
+			put("filter", filter)
+			put("page_size", 1)
+		}
+		val body = payload.toString().toRequestBody("application/json".toMediaTypeOrNull())
+
+		val req = requestBuilder("https://api.notion.com/v1/databases/$databaseId/query")
+			.post(body)
+			.build()
+
+		client.newCall(req).execute().use { resp ->
+			if (!resp.isSuccessful) return null
+			val results = JSONObject(resp.body?.string()).getJSONArray("results")
+			return if (results.length() > 0) results.getJSONObject(0) else null
 		}
 	}
 }
