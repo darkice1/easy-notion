@@ -43,8 +43,8 @@ import easy.config.Config
 import easy.notion.ENotion
 
 fun main() {
-    val notion = ENotion(Config.getProperty("NOTIONKEY").toString())
-    println(notion.getDataBase("your_database_id"))
+	val notion = ENotion(Config.getProperty("NOTIONKEY").toString())
+	println(notion.getDataBase("your_database_id"))
 }
 ```
 
@@ -59,11 +59,11 @@ if (dbId == null) println("Database not found") else println("ID = $dbId")
 
 ```kotlin
 val newDbId = notion.createNotionDatabase(
-    pageId = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",          // parent page
-    databaseName = "Log Entries",
-    columns = mapOf("Level" to "select", "Message" to "rich_text"),
-    timeField = "Created",
-    primaryKey = "ID",
+	pageId = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",          // parent page
+	databaseName = "Log Entries",
+	columns = mapOf("Level" to "select", "Message" to "rich_text"),
+	timeField = "Created",
+	primaryKey = "ID",
 )
 ```
 
@@ -72,19 +72,19 @@ val newDbId = notion.createNotionDatabase(
 ```kotlin
 // insert
 notion.insertRecord(
-    databaseId = newDbId!!,
-    "ID"      to "42",
-    "Level"   to "INFO",
-    "Message" to "Application started",
-    "Created" to "2025-05-25 10:00:00",
+	databaseId = newDbId!!,
+	"ID" to "42",
+	"Level" to "INFO",
+	"Message" to "Application started",
+	"Created" to "2025-05-25 10:00:00",
 )
 
 // update
 notion.updateRecord(
-    databaseId = newDbId,
-    pageId     = "pppppppppppppppppppppppppppppppp",
-    "Level"    to "ERROR",
-    "Message"  to "Oops, something went wrong",
+	databaseId = newDbId,
+	pageId = "pppppppppppppppppppppppppppppppp",
+	"Level" to "ERROR",
+	"Message" to "Oops, something went wrong",
 )
 ```
 
@@ -92,10 +92,10 @@ notion.updateRecord(
 
 ```kotlin
 val ok = notion.ensureDatabaseSchema(
-    databaseId   = newDbId,
-    localColumns = mapOf("ID" to "VARCHAR", "Level" to "VARCHAR", "Detail" to "TEXT"),
-    timeField    = "Created",
-    primaryKey   = "ID",
+	databaseId = newDbId,
+	localColumns = mapOf("ID" to "VARCHAR", "Level" to "VARCHAR", "Detail" to "TEXT"),
+	timeField = "Created",
+	primaryKey = "ID",
 )
 ```
 
@@ -123,16 +123,16 @@ Convert Notion database content to HTML:
 </ul>
 <table style="width:600px;">
     <thead>
-        <tr>
-            <th>Header 1</th>
-            <th>Header 2</th>
-        </tr>
+    <tr>
+        <th>Header 1</th>
+        <th>Header 2</th>
+    </tr>
     </thead>
     <tbody>
-        <tr>
-            <td>Cell 1</td>
-            <td>Cell 2</td>
-        </tr>
+    <tr>
+        <td>Cell 1</td>
+        <td>Cell 2</td>
+    </tr>
     </tbody>
 </table>
 ```
@@ -163,11 +163,11 @@ Use `TestNotionTools` for testing:
 
 ```kotlin
 object TestNotionTools {
-    @JvmStatic
-    fun main(args: Array<String>) {
-        val n = ENotion(Config.getProperty("NOTIONKEY").toString())
-        print(n.getDataBase("1d800250dfa5805e8f45dfcd67d37e60"))
-    }
+	@JvmStatic
+	fun main(args: Array<String>) {
+		val n = ENotion(Config.getProperty("NOTIONKEY").toString())
+		print(n.getDataBase("1d800250dfa5805e8f45dfcd67d37e60"))
+	}
 }
 ```
 
