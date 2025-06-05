@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.github.darkice1"
-version = "0.0.4"
+version = "0.0.5"
 
 val projectName = "easy-notion"
 val projectDesc = "Neo easy Notion SDK."

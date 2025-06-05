@@ -300,6 +300,15 @@ class ENotion(
 							val content = renderRichText(block.getJSONObject(key).getJSONArray("rich_text"))
 							htmlBuilder.append("<li>").append(content).append("</li>")
 						}
+						"quote" -> {
+							val content = renderRichText(block.getJSONObject("quote").getJSONArray("rich_text"))
+							htmlBuilder.append("<blockquote>").append(content).append("</blockquote>")
+						}
+
+						"callout" -> {
+							val content = renderRichText(block.getJSONObject("callout").getJSONArray("rich_text"))
+							htmlBuilder.append("<div class=\"callout\">").append(content).append("</div>")
+						}
 						"divider" -> htmlBuilder.append("<hr/>")
 						"image" -> {
 							val imageObj = block.getJSONObject("image")
@@ -374,6 +383,8 @@ class ENotion(
 							"pre{background:#f5f5f5;padding:10px;border-radius:3px;overflow:auto;}" +
 							"pre code{background:transparent;padding:0;}" +
 							"code{background:#f5f5f5;padding:2px 4px;border-radius:3px;font-family:monospace;}" +
+							"blockquote{border-left:4px solid #E1E3E5;margin:16px 0;padding-left:12px;}" +
+							".callout{border-left:4px solid #E0E2E4;background:#FAFAFA;padding:12px;margin:16px 0;}" +
 							"</style>"
 					htmlBuilder.insert(0, styleTag)
 				}

@@ -1,4 +1,6 @@
 import easy.notion.ENotion
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.FileInputStream
 import java.util.*
 
@@ -17,9 +19,9 @@ object TestNotionTools {
 					put("property", "wpid")
 					put("number", JSONObject().put("is_empty", true))   // 数字列用 number.is_empty
 				}*/
-		/*	val filter = JSONObject().apply {
+		val filter = JSONObject().apply {
 				put("property", "wpid")
-				put("number", JSONObject().put("equals", 237))   // 数字列用 number.is_empty
+			put("number", JSONObject().put("equals", 276))   // 数字列用 number.is_empty
 			}
 
 			val sorts = JSONArray().apply {
@@ -33,9 +35,9 @@ object TestNotionTools {
 			pages.forEach { p ->
 				val j = p as JSONObject
 				println(j.getString("content"))
-			}*/
+			}
 
-		println(n.findNotionDatabase("Neo-WordPress"))
+//		println(n.findNotionDatabase("Neo-WordPress"))
 //		println(pages)
 //		println(n.insertRecord(databaseid,"wpid" to "${System.currentTimeMillis()}"))
 //		println(
