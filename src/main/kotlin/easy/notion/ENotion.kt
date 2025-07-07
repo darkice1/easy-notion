@@ -332,11 +332,10 @@ class ENotion(
 						}
 					}
 					if (modified) {
-						// Whenever a transformer reports modification, perform
-						// append‑move‑archive replacement regardless of block type.
+						// Persist the change to Notion so the remote document stays in sync.
+						// Then continue rendering *this same, now‑modified* block so that
+						// htmlBuilder reflects the latest content.
 						performBlockReplace(block)
-						// Skip any further processing of this block within the loop.
-						continue
 					}
 					val type = block.getString("type")
 					// 统一列表关闭逻辑
