@@ -386,7 +386,8 @@ class ENotion(
 							"blockquote{border-left:4px solid #E1E3E5;margin:16px 0;padding-left:12px;}" +
 							".callout{border-left:4px solid #E0E2E4;background:#FAFAFA;padding:12px;margin:16px 0;}" +
 							"</style>"
-					htmlBuilder.insert(0, styleTag)
+					item.put("styleTag", styleTag)
+//					htmlBuilder.insert(0, styleTag)
 				}
 //				println(htmlBuilder.toString())
 //				item["content"] = htmlBuilder.toString()
