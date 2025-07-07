@@ -129,12 +129,23 @@ class ENotion(
 		}
 	}
 
+	/**
+	 * 查询 Notion 数据库内容并返回 JSON 数组。
+	 *
+	 * @param databaseId    数据库 ID
+	 * @param pageSize      每页最大条数（默认 100）
+	 * @param filter        可选筛选条件（Notion filter 对象）
+	 * @param sorts         可选排序条件（Notion sorts 数组）
+	 * @param transformers  optional array of BlockTransformer to pre‑process each block; default null
+	 * @return 解析后的 JSONArray，每项为一行，含所有字段和渲染后的 content HTML
+	 */
 	@Suppress("unused")
 	fun getDataBase(
 		databaseId: String,
 		pageSize: Int = 100,
 		filter: JSONObject? = null,
 		sorts: JSONArray? = null,
+		transformers: Array<BlockTransformer>? = null,
 	): JSONArray {
 		val url = "https://api.notion.com/v1/databases/$databaseId/query"
 		val mediaType = "application/json".toMediaTypeOrNull()
@@ -155,6 +166,56 @@ class ENotion(
 			val responseJson = JSONObject(response.body?.string())
 			val results = responseJson.getJSONArray("results")
 			val output = JSONArray()
+			// Collect blocks that were modified by transformers, to patch them back in batch
+			/** Replace a single block [blk] (any type) by appending a fresh copy that contains
+			 *  the current data from [blk], moving it right after the original, then archiving
+			 *  the original block.  This preserves order and avoids the PATCH‑400 limitation
+			 *  on media blocks.  Returns `true` on success. */
+			fun performBlockReplace(blk: JSONObject): Boolean {
+				/* ---------- extract parent info ---------- */
+				val parentObj = blk.getJSONObject("parent")
+				val parentType = parentObj.optString("type", "page_id")        // page_id | block_id
+				val parentId = parentObj.optString(parentType, "")
+
+				/* ---------- 1. build copy of the original block ---------- */
+				val blkType = blk.getString("type")
+				val newBlockJson = JSONObject().apply {
+					put("object", "block")
+					put("type", blkType)
+					put(blkType, blk.getJSONObject(blkType))   // deep‑copy
+				}
+
+				/* ---------- 2. append copy immediately AFTER the old block ---------- */
+				val appendBody = JSONObject()
+					// insert the new block right after the current block instead of at the end
+					.put("after", blk.getString("id"))
+					.put("children", JSONArray().put(newBlockJson))
+					.toString()
+					.toRequestBody("application/json".toMediaTypeOrNull())
+
+				val appendReq = requestBuilder("https://api.notion.com/v1/blocks/$parentId/children")
+					.patch(appendBody)
+					.build()
+
+				client.newCall(appendReq).execute().use { resp ->
+					if (!resp.isSuccessful) return false
+				}
+
+				/* ---------- 4. archive (delete) the original block ---------- */
+				val archiveBody = JSONObject().put("archived", true)
+					.toString()
+					.toRequestBody("application/json".toMediaTypeOrNull())
+
+				val archiveReq = requestBuilder("https://api.notion.com/v1/blocks/${blk.getString("id")}")
+					.patch(archiveBody)
+					.build()
+
+				client.newCall(archiveReq).execute().use { resp ->
+					if (!resp.isSuccessful) return false
+				}
+
+				return true
+			}
 
 			for (i in 0 until results.length()) {
 				val page = results.getJSONObject(i)
@@ -263,6 +324,20 @@ class ENotion(
 
 				for (j in 0 until blocks.length()) {
 					val block = blocks.getJSONObject(j)
+					/* ---------- transformer hook ---------- */
+					var modified = false
+					if (transformers != null) {
+						for (t in transformers) {
+							if (t.handle(block)) modified = true
+						}
+					}
+					if (modified) {
+						// Whenever a transformer reports modification, perform
+						// append‑move‑archive replacement regardless of block type.
+						performBlockReplace(block)
+						// Skip any further processing of this block within the loop.
+						continue
+					}
 					val type = block.getString("type")
 					// 统一列表关闭逻辑
 					val isListItem = type == "bulleted_list_item" || type == "numbered_list_item"
