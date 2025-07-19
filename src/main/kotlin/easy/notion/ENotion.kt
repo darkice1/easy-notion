@@ -949,47 +949,71 @@ class ENotion(
 
 	/**
 	 * Locate a page whose [primaryKey] equals [primaryKeyValue].
-	 * Returns the page JSON or `null` when not found.
+	 *
+	 * The result lets callers clearly distinguish between three outcomes:
+	 *
+	 *  * **Success + non‑null value** – the page was found.
+	 *  * **Success + null value**    – the request succeeded but no matching page exists.
+	 *  * **Failure**                 – network / API error, schema missing, or other exception.
+	 *
+	 * Example usage:
+	 * ```
+	 * when (val r = findPageByPrimaryKey(dbId, "Name", "Alice")) {
+	 *     is Result.Success -> if (r.getOrNull() != null) { ... } else { ... }   // not found
+	 *     is Result.Failure -> logger.error(r.exceptionOrNull())
+	 * }
+	 * ```
 	 */
 	@Suppress("unused")
 	fun findPageByPrimaryKey(
 		databaseId: String,
 		primaryKey: String,
 		primaryKeyValue: String,
-	): JSONObject? {
-		val props = getDatabaseProperties(databaseId) ?: return null
-		val primaryProp = props.optJSONObject(primaryKey) ?: return null
+	): Result<JSONObject?> = runCatching {
+		/* ---------------- obtain schema & primary key type ---------------- */
+		val props = getDatabaseProperties(databaseId)
+			?: throw IOException("Failed to fetch properties for database $databaseId")
+
+		val primaryProp = props.optJSONObject(primaryKey)
+			?: throw IllegalArgumentException("Primary key \"$primaryKey\" not present in database schema")
+
 		val type = primaryProp.optString("type", "rich_text")
 
+		/* ---------------- build filter for exact match ---------------- */
 		val filter = JSONObject().apply {
 			put("property", primaryKey)
 			when (type) {
 				"title" -> put("title", JSONObject().put("equals", primaryKeyValue))
 				"rich_text" -> put("rich_text", JSONObject().put("equals", primaryKeyValue))
-				"number" -> {
-					val n = primaryKeyValue.toDoubleOrNull()
-					put("number", JSONObject().put("equals", n ?: primaryKeyValue))
-				}
+				"number" -> put(
+					"number", JSONObject().put(
+						"equals",
+						primaryKeyValue.toDoubleOrNull() ?: primaryKeyValue
+					)
+				)
 
 				"select" -> put("select", JSONObject().put("equals", primaryKeyValue))
 				else -> put("rich_text", JSONObject().put("equals", primaryKeyValue))
 			}
 		}
 
+		/* ---------------- execute search query ---------------- */
 		val payload = JSONObject().apply {
 			put("filter", filter)
 			put("page_size", 1)
 		}
-		val body = payload.toString().toRequestBody("application/json".toMediaTypeOrNull())
+		val body = payload
+			.toString()
+			.toRequestBody("application/json".toMediaTypeOrNull())
 
 		val req = requestBuilder("https://api.notion.com/v1/databases/$databaseId/query")
 			.post(body)
 			.build()
 
 		client.newCall(req).execute().use { resp ->
-			if (!resp.isSuccessful) return null
+			if (!resp.isSuccessful) throw IOException("Unexpected code $resp")
 			val results = JSONObject(resp.body?.string()).getJSONArray("results")
-			return if (results.length() > 0) results.getJSONObject(0) else null
+			if (results.length() > 0) results.getJSONObject(0) else null
 		}
 	}
 }
