@@ -11,10 +11,17 @@
 
 - **Record Insertion** – `insertRecord`  
   Insert a row into a database while automatically converting Kotlin/SQL values to the correct Notion property
-  structure.
+  structure, with optional *markdownContent* rendered as rich Notion blocks.
 
 - **Record Update** – `updateRecord`  
-  Patch one or more columns of an existing page with the same automatic type handling as *insertRecord*.
+  Patch one or more columns of an existing page with the same automatic type handling as *insertRecord*, and
+  optionally append converted Markdown content.
+
+- **Markdown Content Support** – `markdownContent`  
+  The `insertRecord` and `updateRecord` methods now accept an optional **markdownContent** parameter.
+  - Converts full Markdown (headings 1‑3, paragraphs, images, tables, lists, block quotes, horizontal rules, inline *
+    *bold** / *italic* / `code`, links, strike‑through) into native Notion blocks on‑the‑fly.
+  - Images inside tables are automatically extracted and appended with captions to satisfy Notion API constraints.
 
 - **Workspace Search** – `findNotionDatabase`  
   Locate a database by its exact title and return its ID.
@@ -70,21 +77,32 @@ val newDbId = notion.createNotionDatabase(
 ### Inserting and updating records
 
 ```kotlin
-// insert
+// insert (with Markdown body)
 notion.insertRecord(
-	databaseId = newDbId!!,
-	"ID" to "42",
-	"Level" to "INFO",
-	"Message" to "Application started",
-	"Created" to "2025-05-25 10:00:00",
+  databaseId = newDbId!!,
+  markdownContent = """
+        # Welcome
+        This record was **created** via *ENotion*.
+        
+        ---
+        
+        | Picture | Description |
+        |:------:|-------------|
+        | ![](https://example.com/kitten.png) | Cute kitten |
+        """.trimIndent(),
+  "ID" to "42",
+  "Level" to "INFO",
+  "Message" to "Application started",
+  "Created" to "2025-05-25 10:00:00",
 )
 
-// update
+// update (patch fields + append more Markdown)
 notion.updateRecord(
-	databaseId = newDbId,
-	pageId = "pppppppppppppppppppppppppppppppp",
-	"Level" to "ERROR",
-	"Message" to "Oops, something went wrong",
+  databaseId = newDbId,
+  pageId = "pppppppppppppppppppppppppppppppp",
+  markdownContent = "- **现价**：￥208",
+  "Level" to "ERROR",
+  "Message" to "Oops, something went wrong",
 )
 ```
 
@@ -139,6 +157,11 @@ Convert Notion database content to HTML:
 
 The library automatically prepends a lightweight default stylesheet (visible in the snippet above) so the HTML is ready
 for direct embedding.
+
+> **Note**  
+> When you supply *markdownContent* to *insertRecord* / *updateRecord*, ENotion converts the Markdown to Notion blocks
+> first, so the HTML produced by `getDataBase` will precisely match your original Markdown—including images, tables, and
+> dividers.
 
 ## Configuration
 

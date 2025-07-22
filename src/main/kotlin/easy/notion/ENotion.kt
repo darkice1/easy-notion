@@ -761,12 +761,14 @@ class ENotion(
 	 * 4. 对不匹配的类型自动做“尽可能合理”的转换（见 `buildProperties`）。
 	 *
 	 * @param databaseId 目标数据库 ID
+	 * @param markdownContent 可选的 Markdown 内容，将自动转换为 Notion 块
 	 * @param fields     形如 `"Name" to "Foo", "Score" to 99` 的可变参数
 	 * @return 若插入成功，返回 Notion 返回的页面 JSON；否则返回 `null`
 	 */
 	@Suppress("unused")
 	fun insertRecord(
 		databaseId: String,
+		markdownContent: String? = null,
 		vararg fields: Pair<String, Any?>,
 	): JSONObject? {
 
@@ -774,14 +776,48 @@ class ENotion(
 		val dbJson = fetchDatabaseSchema(databaseId) ?: return null
 		val schemaProps = dbJson.getJSONObject("properties")
 
-		/* ---------- 组装 properties ---------- */
+		/* ---------- 组装 properties (自动补全 title) ---------- */
 		val properties = buildProperties(schemaProps, fields)
-		if (properties.isEmpty) return null   // 没有可写入的数据
+
+		// Ensure the database‑required "title" property exists.
+		// Determine the key of the first column whose type == title
+		val titleKey: String? = sequence {
+			val keys = schemaProps.keys()
+			while (keys.hasNext()) yield(keys.next() as String)
+		}.firstOrNull { k -> schemaProps.getJSONObject(k).optString("type") == "title" }
+
+		if (titleKey != null && !properties.has(titleKey)) {
+			// Fallback title: 1) first Markdown heading / first non‑empty line
+			//                2)  timestamp "yyyy-MM-dd HH:mm:ss"
+			val fallbackTitle: String = run {
+				if (!markdownContent.isNullOrBlank()) {
+					markdownContent.lineSequence()
+						.map { it.trim().removePrefix("#").trim() }
+						.firstOrNull { it.isNotBlank() }
+						?: ""
+				} else ""
+			}.ifBlank {
+				LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+			}
+
+			val wrapper = JSONObject().apply {
+				put("type", "text")
+				put("text", JSONObject().put("content", fallbackTitle))
+			}
+			val titleArr = JSONArray().put(wrapper)
+			properties.put(titleKey, JSONObject().put("title", titleArr))
+		}
+
+		// If still empty (edge‑case: schema without a title column), abort early.
+		if (properties.isEmpty) return null
 
 		/* ---------- 构建请求 ---------- */
 		val root = JSONObject().apply {
 			put("parent", JSONObject().apply { put("database_id", databaseId) })
 			put("properties", properties)
+		}
+		if (!markdownContent.isNullOrBlank()) {
+			root.put("children", markdownToNotionBlocks(markdownContent))
 		}
 
 		val body = root.toString().toRequestBody("application/json".toMediaTypeOrNull())
@@ -791,8 +827,12 @@ class ENotion(
 			.build()
 
 		return client.newCall(pageRequest).execute().use { resp ->
-			if (!resp.isSuccessful) return null
-			JSONObject(resp.body?.string())
+			val bodyTxt = resp.body?.string()
+			if (!resp.isSuccessful) {
+				// 直接抛出异常让调用方感知错误详情，而不是静默返回 null
+				throw IOException("Notion API error (${resp.code}): $bodyTxt")
+			}
+			JSONObject(bodyTxt)
 		}
 	}
 
@@ -801,6 +841,7 @@ class ENotion(
 	 *
 	 * @param databaseId 所在数据库 ID
 	 * @param pageId     目标页面 ID
+	 * @param markdownContent 可选的 Markdown 内容，将自动转换为 Notion 块并附加
 	 * @param fields     待更新的列及新值
 	 * @return 更新成功返回页面 JSON；否则返回 null
 	 *
@@ -810,6 +851,7 @@ class ENotion(
 	fun updateRecord(
 		databaseId: String,
 		pageId: String,
+		markdownContent: String? = null,
 		vararg fields: Pair<String, Any?>,
 	): JSONObject? {
 
@@ -829,6 +871,18 @@ class ENotion(
 		val patchReq = requestBuilder("https://api.notion.com/v1/pages/$pageId")
 			.patch(body)
 			.build()
+
+		if (!markdownContent.isNullOrBlank()) {
+			val blocks = markdownToNotionBlocks(markdownContent)
+			if (blocks.length() > 0) {
+				val appendBody = JSONObject().put("children", blocks)
+					.toString().toRequestBody("application/json".toMediaTypeOrNull())
+				val appendReq = requestBuilder("https://api.notion.com/v1/blocks/$pageId/children")
+					.patch(appendBody)
+					.build()
+				client.newCall(appendReq).execute().use { /* ignore */ }
+			}
+		}
 
 		return client.newCall(patchReq).execute().use { resp ->
 			if (!resp.isSuccessful) return null
@@ -865,12 +919,469 @@ class ENotion(
 		}
 	}
 
+	/** Build a rich‑text span with optional annotations. */
+	private fun buildRichSpan(
+		text: String,
+		bold: Boolean = false,
+		italic: Boolean = false,
+	): JSONObject = JSONObject().apply {
+		put("type", "text")
+		put("text", JSONObject().put("content", text))
+		put(
+			"annotations",
+			JSONObject().apply {
+				put("bold", bold)
+				put("italic", italic)
+				put("strikethrough", false)
+				put("underline", false)
+				put("code", false)
+				put("color", "default")
+			},
+		)
+	}
+
+	/** Convert a single Markdown inline string to Notion rich_text array with bold / italic / link / code / strike. */
+	private fun inlineMarkdownToRichText(raw: String): JSONArray {
+		val rich = JSONArray()
+		var cursor = 0
+		val pattern = Regex("""(\*\*.+?\*\*|\*[^*\s][^*]*?\*|~~[^~]+~~|`[^`]+`|\[[^]]+]\([^)]+\))""")
+		pattern.findAll(raw).forEach { m ->
+			if (m.range.first > cursor) {
+				val plain = raw.substring(cursor, m.range.first)
+				if (plain.isNotEmpty()) rich.put(buildRichSpan(plain))
+			}
+			val token = m.value
+			when {
+				token.startsWith("**") -> rich.put(buildRichSpan(token.removeSurrounding("**"), bold = true))
+				token.startsWith("*") -> rich.put(buildRichSpan(token.removeSurrounding("*"), italic = true))
+				token.startsWith("~~") -> {
+					val span = buildRichSpan(token.removeSurrounding("~~"))
+					span.getJSONObject("annotations").put("strikethrough", true)
+					rich.put(span)
+				}
+
+				token.startsWith("`") -> {
+					val span = buildRichSpan(token.removeSurrounding("`"))
+					span.getJSONObject("annotations").put("code", true)
+					rich.put(span)
+				}
+
+				token.startsWith("[") -> {
+					val md = Regex("""\[(.+)]\((.+)\)""").find(token)!!
+					val txt = md.groupValues[1]
+					val url = md.groupValues[2]
+					val span = buildRichSpan(txt)
+					span.put("href", url)
+					rich.put(span)
+				}
+			}
+			cursor = m.range.last + 1
+		}
+		if (cursor < raw.length) {
+			val rest = raw.substring(cursor)
+			if (rest.isNotEmpty()) rich.put(buildRichSpan(rest))
+		}
+		return rich
+	}
+
+	/** Build an image block (external or file) with `alt` as caption. */
+	private fun buildImageBlock(url: String, alt: String = ""): JSONObject = JSONObject().apply {
+		put("object", "block")
+		put("type", "image")
+		put(
+			"image",
+			JSONObject().apply {
+				if (url.startsWith("http")) {
+					put("type", "external")
+					put("external", JSONObject().put("url", url))
+				} else {
+					put("type", "file")
+					put("file", JSONObject().put("url", url))
+				}
+				put(
+					"caption",
+					JSONArray().put(
+						JSONObject().apply {
+							put("type", "text")
+							put("text", JSONObject().put("content", alt))
+						},
+					),
+				)
+			},
+		)
+	}
+
+	/** Build a table_row block with plain‑text cells. */
+	private fun buildTableRow(cells: List<String>): JSONObject {
+		val cellArr = JSONArray()
+		for (text in cells) {
+			val rich = JSONArray().put(buildRichSpan(text.trim()))
+			cellArr.put(rich)
+		}
+		return JSONObject().apply {
+			put("object", "block")
+			put("type", "table_row")
+			put(
+				"table_row",
+				JSONObject().put("cells", cellArr),
+			)
+		}
+	}
+
+	/** Given a list of Markdown table lines, convert to a Notion *table* block. */
+	private fun buildTableBlock(tableLines: List<String>): JSONObject {
+		if (tableLines.size < 2) return JSONObject()   // malformed
+
+		// Header |---|---| separator line is usually second. Ignore it safely.
+		val headerCells = tableLines.first()
+			.trim('|')
+			.split("|")
+			.map { it.trim() }
+
+		val tableWidth = headerCells.size
+		val rowChildren = JSONArray()
+
+		// ---------- header row ----------
+		rowChildren.put(buildTableRow(headerCells))
+
+		// ---------- data rows ----------
+		// start scanning after header and separator lines
+		for (idx in 2 until tableLines.size) {
+			val rowCells = tableLines[idx]
+				.trim('|')
+				.split("|")
+				.map { it.trim() }
+				.let { cells ->
+					// normalise row length to tableWidth
+					if (cells.size < tableWidth) cells + List(tableWidth - cells.size) { "" }
+					else cells.take(tableWidth)
+				}
+			rowChildren.put(buildTableRow(rowCells))
+		}
+
+		// ---------- assemble table block ----------
+		return JSONObject().apply {
+			put("object", "block")
+			put("type", "table")
+			put(
+				"table",
+				JSONObject()
+					.put("table_width", tableWidth)
+					.put("has_column_header", true)
+					.put("has_row_header", false)
+					.put("children", rowChildren),
+			)
+		}
+	}
+
 	/**
-	 * Ensure the remote database schema contains every column in [localColumns].
-	 * Missing columns are added with a minimal definition that matches their
-	 * mapped Notion type. Returns *true* when the schema is already up‑to‑date
-	 * or when the PATCH succeeds.
+	 * Simple Markdown → Notion block converter (supports paragraphs, headings, lists,
+	 * code, quotes, **bold**, and inline images). For full‑fidelity conversion,
+	 * see [markdownToNotionBlocks].
 	 */
+	private fun parseMarkdownToBlocks(markdown: String): JSONArray {
+		val lines = markdown.lines()
+		val imgPattern = Regex("""!\[(.*?)]\((.*?)\)""")
+//        val boldPattern = Regex("""\*\*(.+?)\*\*""")
+		val blocks = JSONArray()
+		var inCode = false
+		val codeLines = mutableListOf<String>()
+		var codeLanguage = ""
+		// --- table state ---
+		var collectingTable = false
+		val tableBuffer = mutableListOf<String>()
+
+		for (line in lines) {
+			val trimmed = line.trim()
+
+			// Detect Markdown table row (pipes on both ends)
+			val isTableRow = trimmed.startsWith("|") && trimmed.endsWith("|")
+
+			// ------------------------------------------------------------------
+			// Special case: table row that embeds an image in the first column
+			// e.g. "| ![](url) | caption |"
+			// Notion table cells *cannot* contain images, therefore convert such
+			// rows into:  <image block> + <paragraph caption>
+			// ------------------------------------------------------------------
+			if (isTableRow && trimmed.contains("![")) {
+				// Flush any pending textual table first
+				if (collectingTable && tableBuffer.size >= 2) {
+					blocks.put(buildTableBlock(tableBuffer))
+				}
+				tableBuffer.clear()
+				collectingTable = false
+
+				// Split the row and extract parts
+				val cells = trimmed.trim('|').split("|")
+				val imgCell = cells.getOrNull(0)?.trim() ?: ""
+				val descCell = cells.getOrNull(1)?.trim() ?: ""
+
+				val imgMatch = Regex("""!\[(.*?)]\((.*?)\)""").find(imgCell)
+				if (imgMatch != null) {
+					val alt = imgMatch.groupValues[1]
+					val url = imgMatch.groupValues[2]
+					// 1) image block
+					blocks.put(buildImageBlock(url, alt))
+					// 2) optional caption as paragraph (use descCell if provided, else alt)
+					val captionText = descCell.ifBlank { alt }
+					if (captionText.isNotBlank()) {
+						blocks.put(
+							JSONObject()
+								.put("object", "block")
+								.put("type", "paragraph")
+								.put(
+									"paragraph",
+									JSONObject().put(
+										"rich_text",
+										JSONArray().put(buildRichSpan(captionText)),
+									),
+								),
+						)
+					}
+				}
+				continue
+			}
+
+			// ------------------------------------------------------------------
+			// Regular textual table rows: accumulate for buildTableBlock later
+			// ------------------------------------------------------------------
+			if (isTableRow) {
+				collectingTable = true
+				tableBuffer.add(trimmed)
+				continue
+			}
+			if (collectingTable) {
+				// End of table – flush
+				if (tableBuffer.size >= 2) {
+					blocks.put(buildTableBlock(tableBuffer))
+				}
+				tableBuffer.clear()
+				collectingTable = false
+			}
+			// ------------------------------------------------------------------
+			// Horizontal rule: lines with only --- or *** (no other text)
+			// ------------------------------------------------------------------
+			if (trimmed == "---" || trimmed == "***" || trimmed.matches(Regex("""^[-*_]{3,}\s*$"""))) {
+				blocks.put(
+					JSONObject()
+						.put("object", "block")
+						.put("type", "divider")
+						.put("divider", JSONObject()),
+				)
+				continue
+			}
+			// --- image ---
+			val imgMatch = imgPattern.matchEntire(trimmed)
+			if (imgMatch != null) {
+				val alt = imgMatch.groupValues[1]
+				val url = imgMatch.groupValues[2]
+				blocks.put(buildImageBlock(url, alt))
+				continue
+			}
+			if (trimmed.startsWith("```")) {
+				if (inCode) {
+					blocks.put(
+						JSONObject()
+							.put("object", "block")
+							.put("type", "code")
+							.put(
+								"code",
+								JSONObject()
+									.put("language", codeLanguage.ifBlank { "plain text" })
+									.put(
+										"rich_text",
+										JSONArray().put(
+											JSONObject()
+												.put("type", "text")
+												.put("text", JSONObject().put("content", codeLines.joinToString("\n")))
+										)
+									)
+							)
+					)
+					codeLines.clear()
+					codeLanguage = ""
+					inCode = false
+				} else {
+					inCode = true
+					codeLanguage = trimmed.removePrefix("```").trim()
+				}
+				continue
+			}
+			if (inCode) {
+				codeLines.add(line)
+				continue
+			}
+			when {
+				trimmed.startsWith("# ") -> {
+					blocks.put(
+						JSONObject()
+							.put("object", "block")
+							.put("type", "heading_1")
+							.put(
+								"heading_1",
+								JSONObject().put(
+									"rich_text",
+									JSONArray().put(
+										JSONObject()
+											.put("type", "text")
+											.put("text", JSONObject().put("content", trimmed.removePrefix("# ").trim()))
+									)
+								)
+							)
+					)
+				}
+
+				trimmed.startsWith("## ") -> {
+					blocks.put(
+						JSONObject()
+							.put("object", "block")
+							.put("type", "heading_2")
+							.put(
+								"heading_2",
+								JSONObject().put(
+									"rich_text",
+									JSONArray().put(
+										JSONObject()
+											.put("type", "text")
+											.put(
+												"text",
+												JSONObject().put("content", trimmed.removePrefix("## ").trim())
+											)
+									)
+								)
+							)
+					)
+				}
+
+				trimmed.startsWith("### ") -> {
+					blocks.put(
+						JSONObject()
+							.put("object", "block")
+							.put("type", "heading_3")
+							.put(
+								"heading_3",
+								JSONObject().put(
+									"rich_text",
+									JSONArray().put(
+										JSONObject()
+											.put("type", "text")
+											.put(
+												"text",
+												JSONObject().put("content", trimmed.removePrefix("### ").trim())
+											)
+									)
+								)
+							)
+					)
+				}
+
+				trimmed.startsWith("> ") -> {
+					blocks.put(
+						JSONObject()
+							.put("object", "block")
+							.put("type", "quote")
+							.put(
+								"quote",
+								JSONObject().put(
+									"rich_text",
+									JSONArray().put(
+										JSONObject()
+											.put("type", "text")
+											.put("text", JSONObject().put("content", trimmed.removePrefix("> ").trim()))
+									)
+								)
+							)
+					)
+				}
+
+				trimmed.startsWith("- ") || trimmed.startsWith("* ") -> {
+					blocks.put(
+						JSONObject()
+							.put("object", "block")
+							.put("type", "bulleted_list_item")
+							.put(
+								"bulleted_list_item",
+								JSONObject().put(
+									"rich_text",
+									inlineMarkdownToRichText(trimmed.drop(2).trim())
+								)
+							)
+					)
+				}
+
+				trimmed.matches(Regex("""\d+\.\s+.*""")) -> {
+					val content = trimmed.replace(Regex("""^\d+\.\s+"""), "")
+					blocks.put(
+						JSONObject()
+							.put("object", "block")
+							.put("type", "numbered_list_item")
+							.put(
+								"numbered_list_item",
+								JSONObject().put(
+									"rich_text",
+									inlineMarkdownToRichText(content)
+								)
+							)
+					)
+				}
+
+				trimmed.isBlank() -> {
+					// skip blank lines
+				}
+
+				else -> {
+					val rich = inlineMarkdownToRichText(trimmed)
+					blocks.put(
+						JSONObject()
+							.put("object", "block")
+							.put("type", "paragraph")
+							.put("paragraph", JSONObject().put("rich_text", rich)),
+					)
+				}
+			}
+		}
+		// After loop: flush any pending table
+		if (collectingTable && tableBuffer.size >= 2) {
+			blocks.put(buildTableBlock(tableBuffer))
+		}
+		return blocks
+	}
+
+	/**
+	 * High‑fidelity Markdown → Notion conversion that prefers the mature
+	 * Node package **@tryfabric/martian** (460+ GitHub stars).
+	 * Falls back to the simple converter when Node/Martian is unavailable.
+	 *
+	 * Requires a working `node` runtime and a global install:
+	 *     npm i -g @tryfabric/martian
+	 */
+	private fun markdownToNotionBlocks(markdown: String): JSONArray {
+		if (markdown.isBlank()) return JSONArray()
+		return try {
+			val js = """
+                const { markdownToBlocks } = require('@tryfabric/martian');
+                const fs = require('fs');
+                const md = fs.readFileSync(0, 'utf8');
+                console.log(JSON.stringify(markdownToBlocks(md)));
+            """.trimIndent()
+
+			val proc = ProcessBuilder("node", "-e", js)
+				.redirectErrorStream(true)
+				.start()
+
+			proc.outputStream.bufferedWriter().use { it.write(markdown) }
+
+			if (!proc.waitFor(10, TimeUnit.SECONDS)) {
+				proc.destroyForcibly()
+				return parseMarkdownToBlocks(markdown)
+			}
+
+			val out = proc.inputStream.bufferedReader().readText().trim()
+			if (out.isEmpty()) parseMarkdownToBlocks(markdown) else JSONArray(out)
+		} catch (_: Exception) {
+			parseMarkdownToBlocks(markdown)
+		}
+	}
 	@Suppress("unused")
 	fun ensureDatabaseSchema(
 		databaseId: String,
