@@ -20,6 +20,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
@@ -609,14 +610,13 @@ class ENotion(
 	 * Search the current workspace for a Notion database whose title exactly matches
 	 * [databaseName] and return its database ID.
 	 *
-	 * Internally uses the `/v1/search` endpoint with a filter limited to `database` objects.
-	 * Returns `null` if no exact‑matching database is found.
-	 *
-	 * @param databaseName The title of the database to locate (case‑sensitive exact match).
-	 * @return The database ID (`String`) if found; otherwise `null`.
+	 * The result clearly distinguishes between three outcomes:
+	 *  * **Success + non‑null value** – a matching database was found.
+	 *  * **Success + null value**  – the request succeeded but no match exists.
+	 *  * **Failure** – network/API error or other exception during the request.
 	 */
 	@Suppress("unused")
-	fun findNotionDatabase(databaseName: String): String? {
+	fun findNotionDatabase(databaseName: String): Result<String?> = runCatching {
 		val searchUrl = "https://api.notion.com/v1/search"
 		val payload = JSONObject().apply {
 			put("query", databaseName)
@@ -638,7 +638,7 @@ class ENotion(
 			.post(body)
 			.build()
 
-		this.client.newCall(request).execute().use { response ->
+		client.newCall(request).execute().use { response ->
 			if (!response.isSuccessful) throw IOException("Unexpected code $response")
 			val json = JSONObject(response.body?.string())
 			val results = json.getJSONArray("results")
@@ -652,11 +652,12 @@ class ENotion(
 						.getJSONObject("text")
 						.getString("content")
 					if (name == databaseName) {
-						return db.getString("id")
+						return@runCatching db.getString("id")
 					}
 				}
 			}
-			return null
+			// No matching database found
+			null
 		}
 	}
 
@@ -906,11 +907,17 @@ class ENotion(
 	/** Latest value of [timeField] in MySQL `yyyy-MM-dd HH:mm:ss` format, or `null` when empty. */
 	@Suppress("unused")
 	fun getLatestTimestamp(databaseId: String, timeField: String): String? {
+		/* ---------- 1. query the latest page sorted by [timeField] ---------- */
 		val payload = JSONObject().apply {
-			put("sorts", JSONArray().put(JSONObject().apply {
-				put("property", timeField)
-				put("direction", "descending")
-			}))
+			put(
+				"sorts",
+				JSONArray().put(
+					JSONObject().apply {
+						put("property", timeField)
+						put("direction", "descending")
+					},
+				),
+			)
 			put("page_size", 1)
 		}
 		val body = payload.toString().toRequestBody("application/json".toMediaTypeOrNull())
@@ -925,10 +932,33 @@ class ENotion(
 			if (results.length() == 0) return null
 
 			val props = results.getJSONObject(0).getJSONObject("properties")
-			val dateObj = props.optJSONObject(timeField)?.optJSONObject("date") ?: return null
-			val iso = dateObj.getString("start")
-			val odt = OffsetDateTime.parse(iso)
-			return odt.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+			val fieldObj = props.optJSONObject(timeField) ?: return null
+
+			/* ---------- 2. extract the raw string value ---------- */
+			val raw: String? = when (fieldObj.optString("type")) {
+				"date" -> fieldObj.optJSONObject("date")?.optString("start")
+				"rich_text" -> fieldObj.optJSONArray("rich_text")?.optJSONObject(0)
+					?.optJSONObject("text")?.optString("content")
+
+				"title" -> fieldObj.optJSONArray("title")?.optJSONObject(0)
+					?.optJSONObject("text")?.optString("content")
+
+				else -> null
+			}
+			if (raw.isNullOrBlank()) return null
+
+			/* ---------- 3. normalise to "yyyy-MM-dd HH:mm:ss" ---------- */
+			val targetFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+			// Try ISO formats first
+			return try {
+				OffsetDateTime.parse(raw).format(targetFmt)
+			} catch (ignored: Exception) {
+				try {
+					LocalDateTime.parse(raw, targetFmt).format(targetFmt)
+				} catch (ignored2: Exception) {
+					null
+				}
+			}
 		}
 	}
 
@@ -952,9 +982,9 @@ class ENotion(
 	 *
 	 * The result lets callers clearly distinguish between three outcomes:
 	 *
-	 *  * **Success + non‑null value** – the page was found.
-	 *  * **Success + null value**    – the request succeeded but no matching page exists.
-	 *  * **Failure**                 – network / API error, schema missing, or other exception.
+	 *  * **Success + non‑null value** –the page was found.
+	 *  * **Success + null value** the request succeeded but no matching page exists.
+	 *  * **Failure** network / API error, schema missing, or other exception.
 	 *
 	 * Example usage:
 	 * ```
