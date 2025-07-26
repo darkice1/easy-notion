@@ -530,6 +530,8 @@ class ENotion(
 				"select" -> {
 					val name = when (value) {
 						is String -> value
+						is Array<*> -> value.firstOrNull()?.toString() ?: ""
+						is Collection<*> -> value.firstOrNull()?.toString() ?: ""
 						else -> value.toString()
 					}
 //					prop["select"] = JSONObject().apply { put("name", name) }
@@ -543,16 +545,16 @@ class ENotion(
 //							arr.add(JSONObject().apply { put("name", v.toString()) })
 							arr.put(JSONObject().apply { put("name", v.toString()) })
 						}
-
+						is Array<*> -> value.forEach { v ->
+							arr.put(JSONObject().apply { put("name", v.toString()) })
+						}
 						is String -> {              // 逗号分隔字符串
 							value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 //								.forEach { v -> arr.add(JSONObject().apply { put("name", v) }) }
 								.forEach { v -> arr.put(JSONObject().apply { put("name", v) }) }
 						}
-
 //						else -> arr.add(JSONObject().apply { put("name", value.toString()) })
 						else -> arr.put(JSONObject().apply { put("name", value.toString()) })
-
 					}
 //					prop["multi_select"] = arr
 					prop.put("multi_select", arr)
@@ -940,6 +942,33 @@ class ENotion(
 		)
 	}
 
+	/** Build a rich‑text span that embeds a hyperlink, with optional bold / italic flags. */
+	private fun buildLinkedRichSpan(
+		text: String,
+		url: String,
+		bold: Boolean = false,
+		italic: Boolean = false,
+	): JSONObject = buildRichSpan(text, bold, italic).apply {
+		getJSONObject("text").put(
+			"link",
+			JSONObject().apply {
+				put("type", "url")
+				put("url", url)
+			},
+		)
+	}
+
+	/** Apply additional bold / italic flags to every span in [arr] (mutates in‑place). */
+	private fun applyStyle(arr: JSONArray, addBold: Boolean = false, addItalic: Boolean = false): JSONArray {
+		for (i in 0 until arr.length()) {
+			val span = arr.getJSONObject(i)
+			val ann = span.getJSONObject("annotations")
+			if (addBold) ann.put("bold", true)
+			if (addItalic) ann.put("italic", true)
+		}
+		return arr
+	}
+
 	/** Convert a single Markdown inline string to Notion rich_text array with bold / italic / link / code / strike. */
 	private fun inlineMarkdownToRichText(raw: String): JSONArray {
 		val rich = JSONArray()
@@ -952,27 +981,34 @@ class ENotion(
 			}
 			val token = m.value
 			when {
-				token.startsWith("**") -> rich.put(buildRichSpan(token.removeSurrounding("**"), bold = true))
-				token.startsWith("*") -> rich.put(buildRichSpan(token.removeSurrounding("*"), italic = true))
+				token.startsWith("**") -> {
+					val inner = token.removeSurrounding("**")
+					// Recursively parse inner Markdown, then force‑apply bold
+					val sub = applyStyle(inlineMarkdownToRichText(inner), addBold = true)
+					for (k in 0 until sub.length()) rich.put(sub.getJSONObject(k))
+				}
+
+				token.startsWith("*") -> {
+					val inner = token.removeSurrounding("*")
+					// Recursively parse inner Markdown, then force‑apply italic
+					val sub = applyStyle(inlineMarkdownToRichText(inner), addItalic = true)
+					for (k in 0 until sub.length()) rich.put(sub.getJSONObject(k))
+				}
 				token.startsWith("~~") -> {
 					val span = buildRichSpan(token.removeSurrounding("~~"))
 					span.getJSONObject("annotations").put("strikethrough", true)
 					rich.put(span)
 				}
-
 				token.startsWith("`") -> {
 					val span = buildRichSpan(token.removeSurrounding("`"))
 					span.getJSONObject("annotations").put("code", true)
 					rich.put(span)
 				}
-
 				token.startsWith("[") -> {
 					val md = Regex("""\[(.+)]\((.+)\)""").find(token)!!
 					val txt = md.groupValues[1]
 					val url = md.groupValues[2]
-					val span = buildRichSpan(txt)
-					span.put("href", url)
-					rich.put(span)
+					rich.put(buildLinkedRichSpan(txt, url))
 				}
 			}
 			cursor = m.range.last + 1
@@ -1074,13 +1110,60 @@ class ENotion(
 		}
 	}
 
+	private fun normalizeMarkdown(md: String): String {
+		// single pattern with 4 alternations; groups:
+		// 1‑2:  image  alt / url
+		// 3‑4:  Chinese txt / url
+		// 5:    bare url
+		// 6‑7:  link   txt / url
+		val pattern = Regex(
+			"""!\[([^]]*)]\(\s*([^)]+?)\s*\)|【([^】]+)】\s*\[([^]]+)]|\[((?:https?|ftp)://[^\s\]]+)]|\[(.+?)]\(\s*([^)]+?)\s*\)""",
+			setOf(RegexOption.DOT_MATCHES_ALL),
+		)
+
+		val sb = StringBuilder()
+		var last = 0
+		for (m in pattern.findAll(md)) {
+			sb.append(md, last, m.range.first)
+			when {
+				m.groups[1] != null -> {         // image
+					val alt = m.groups[1]!!.value
+					val url = m.groups[2]!!.value.trim()
+					sb.append("![").append(alt).append("](").append(url).append(")")
+				}
+
+				m.groups[3] != null -> {         // Chinese link
+					val txt = m.groups[3]!!.value
+					val url = m.groups[4]!!.value.trim()
+					sb.append("[").append(txt).append("](").append(url).append(")")
+				}
+
+				m.groups[5] != null -> {         // bare URL
+					val url = m.groups[5]!!.value
+					sb.append("[").append(url).append("](").append(url).append(")")
+				}
+
+				else -> {                        // normal link (6‑7)
+					val txt = m.groups[6]!!.value
+					val url = m.groups[7]!!.value.trim()
+					sb.append("[").append(txt).append("](").append(url).append(")")
+				}
+			}
+			last = m.range.last + 1
+		}
+		sb.append(md, last, md.length)
+		return sb.toString()
+	}
+
 	/**
 	 * Simple Markdown → Notion block converter (supports paragraphs, headings, lists,
 	 * code, quotes, **bold**, and inline images). For full‑fidelity conversion,
 	 * see [markdownToNotionBlocks].
 	 */
 	private fun parseMarkdownToBlocks(markdown: String): JSONArray {
-		val lines = markdown.lines()
+		// --- normalise images & links in one pass ---
+		val normalisedMarkdown = normalizeMarkdown(markdown)
+		val lines = normalisedMarkdown.lines()
 		val imgPattern = Regex("""!\[(.*?)]\((.*?)\)""")
 //        val boldPattern = Regex("""\*\*(.+?)\*\*""")
 		val blocks = JSONArray()
@@ -1213,6 +1296,7 @@ class ENotion(
 			}
 			when {
 				trimmed.startsWith("# ") -> {
+					val contentArr = inlineMarkdownToRichText(trimmed.removePrefix("# ").trim())
 					blocks.put(
 						JSONObject()
 							.put("object", "block")
@@ -1221,17 +1305,14 @@ class ENotion(
 								"heading_1",
 								JSONObject().put(
 									"rich_text",
-									JSONArray().put(
-										JSONObject()
-											.put("type", "text")
-											.put("text", JSONObject().put("content", trimmed.removePrefix("# ").trim()))
-									)
+									contentArr
 								)
 							)
 					)
 				}
 
 				trimmed.startsWith("## ") -> {
+					val contentArr = inlineMarkdownToRichText(trimmed.removePrefix("## ").trim())
 					blocks.put(
 						JSONObject()
 							.put("object", "block")
@@ -1240,20 +1321,14 @@ class ENotion(
 								"heading_2",
 								JSONObject().put(
 									"rich_text",
-									JSONArray().put(
-										JSONObject()
-											.put("type", "text")
-											.put(
-												"text",
-												JSONObject().put("content", trimmed.removePrefix("## ").trim())
-											)
-									)
+									contentArr
 								)
 							)
 					)
 				}
 
 				trimmed.startsWith("### ") -> {
+					val contentArr = inlineMarkdownToRichText(trimmed.removePrefix("### ").trim())
 					blocks.put(
 						JSONObject()
 							.put("object", "block")
@@ -1262,14 +1337,25 @@ class ENotion(
 								"heading_3",
 								JSONObject().put(
 									"rich_text",
-									JSONArray().put(
-										JSONObject()
-											.put("type", "text")
-											.put(
-												"text",
-												JSONObject().put("content", trimmed.removePrefix("### ").trim())
-											)
-									)
+									contentArr
+								)
+							)
+					)
+				}
+
+				trimmed.startsWith("#### ") -> {
+					// Markdown supports h4‑h6, but Notion only has heading_1‑3.
+					// Map any deeper heading (####, #####, ######) to heading_3.
+					val contentArr = inlineMarkdownToRichText(trimmed.removePrefix("#### ").trim())
+					blocks.put(
+						JSONObject()
+							.put("object", "block")
+							.put("type", "heading_3")
+							.put(
+								"heading_3",
+								JSONObject().put(
+									"rich_text",
+									contentArr
 								)
 							)
 					)
