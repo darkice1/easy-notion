@@ -75,8 +75,21 @@ class ENotion(
 					val textObj = obj.getJSONObject("text")
 					textObj.getString("content") to textObj.optJSONObject("link")
 				}
-
 				else -> obj.getString("plain_text") to null       // mention / equation / etc.
+			}
+
+			/* ---------- inline Markdown image e.g. ![alt](url) ---------- */
+			val imgRegex = Regex("""!\[([^]]*)]\s*\(([^)]+)\)""")
+			val imgMatch = imgRegex.matchEntire(rawContent.trim())
+			if (imgMatch != null) {
+				val alt = imgMatch.groupValues[1]
+				val url = imgMatch.groupValues[2]
+				sb.append("<img src=\"")
+					.append(url)
+					.append("\" alt=\"")
+					.append(alt.replace("\"", "&quot;"))
+					.append("\" decoding=\"async\"/>")
+				continue
 			}
 
 			/* ---------- apply annotations inside‑out ---------- */
@@ -1381,34 +1394,71 @@ class ENotion(
 				}
 
 				trimmed.startsWith("- ") || trimmed.startsWith("* ") -> {
-					blocks.put(
-						JSONObject()
-							.put("object", "block")
-							.put("type", "bulleted_list_item")
-							.put(
-								"bulleted_list_item",
-								JSONObject().put(
-									"rich_text",
-									inlineMarkdownToRichText(trimmed.drop(2).trim())
+					val content = trimmed.drop(2).trim()
+					val imgMatch = imgPattern.matchEntire(content)
+					if (imgMatch != null) {
+						// The list item itself is a Markdown image – render it as an image block
+						val alt = imgMatch.groupValues[1]
+						val url = imgMatch.groupValues[2]
+						blocks.put(
+							JSONObject()
+								.put("object", "block")
+								.put("type", "bulleted_list_item")
+								.put(
+									"bulleted_list_item",
+									JSONObject()
+										.put("rich_text", JSONArray())            // no inline text
+										.put("children", JSONArray().put(buildImageBlock(url, alt)))
 								)
-							)
-					)
+						)
+					} else {
+						// Fallback to the original behaviour
+						blocks.put(
+							JSONObject()
+								.put("object", "block")
+								.put("type", "bulleted_list_item")
+								.put(
+									"bulleted_list_item",
+									JSONObject().put(
+										"rich_text",
+										inlineMarkdownToRichText(content)
+									)
+								)
+						)
+					}
 				}
 
 				trimmed.matches(Regex("""\d+\.\s+.*""")) -> {
-					val content = trimmed.replace(Regex("""^\d+\.\s+"""), "")
-					blocks.put(
-						JSONObject()
-							.put("object", "block")
-							.put("type", "numbered_list_item")
-							.put(
-								"numbered_list_item",
-								JSONObject().put(
-									"rich_text",
-									inlineMarkdownToRichText(content)
+					val content = trimmed.replace(Regex("""^\d+\.\s+"""), "").trim()
+					val imgMatch = imgPattern.matchEntire(content)
+					if (imgMatch != null) {
+						val alt = imgMatch.groupValues[1]
+						val url = imgMatch.groupValues[2]
+						blocks.put(
+							JSONObject()
+								.put("object", "block")
+								.put("type", "numbered_list_item")
+								.put(
+									"numbered_list_item",
+									JSONObject()
+										.put("rich_text", JSONArray())
+										.put("children", JSONArray().put(buildImageBlock(url, alt)))
 								)
-							)
-					)
+						)
+					} else {
+						blocks.put(
+							JSONObject()
+								.put("object", "block")
+								.put("type", "numbered_list_item")
+								.put(
+									"numbered_list_item",
+									JSONObject().put(
+										"rich_text",
+										inlineMarkdownToRichText(content)
+									)
+								)
+						)
+					}
 				}
 
 				trimmed.isBlank() -> {
