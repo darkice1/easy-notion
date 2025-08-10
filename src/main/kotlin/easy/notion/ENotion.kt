@@ -179,6 +179,7 @@ class ENotion(
 			if (!response.isSuccessful) throw IOException("Unexpected code $response")
 			val responseJson = JSONObject(response.body?.string())
 			val results = responseJson.getJSONArray("results")
+//			println(results)
 			val output = JSONArray()
 			// Collect blocks that were modified by transformers, to patch them back in batch
 			/** Replace a single block [blk] (any type) by appending a fresh copy that contains
@@ -322,11 +323,18 @@ class ENotion(
 //							item[key] = prop.getString("last_edited_time")
 							item.put(key, prop.getString("last_edited_time"))
 						}
+						"button" -> {
+							continue
+						}
 
 						else -> {
 							// 其他类型统一转为字符串
 //							item[key] = prop.toString()
-							item.put(key, prop.toString())
+							try {
+								item.put(key, prop.toString())
+							} catch (e: Exception) {
+								throw e
+							}
 						}
 					}
 				}
