@@ -126,6 +126,40 @@ class ENotion(
 
 		return sb.toString()
 	}
+
+	/** Render a heading with given Notion heading level ("1"|"2"|"3"). */
+	private fun renderHeadingHtml(level: String, contentArr: JSONArray): String {
+		val content = renderRichText(contentArr)
+		return "<h$level>$content</h$level>"
+	}
+
+	/** Render a list item <li> from a Notion rich_text array. */
+	private fun renderListItemHtml(contentArr: JSONArray): String {
+		val content = renderRichText(contentArr)
+		return "<li>$content</li>"
+	}
+
+	/** Generic fallback renderer for block types not explicitly handled. */
+	private fun renderGenericBlockHtml(block: JSONObject): String {
+		val t = block.getString("type")
+		val obj = block.getJSONObject(t)
+		val rich = obj.optJSONArray("rich_text")
+		if (rich != null) {
+			val inner = renderRichText(rich)
+			return when (t) {
+				"paragraph" -> "<p>$inner</p>"
+				"to_do" -> {
+					val checked = obj.optBoolean("checked", false)
+					"<div class=\"to-do\"><input type=\"checkbox\" disabled" + (if (checked) " checked" else "") + "/> " + inner + "</div>"
+				}
+
+				else -> "<div data-notion-type=\"$t\">$inner</div>"
+			}
+		}
+		// fallback to plain text or JSON string
+		val plain = obj.optString("plain_text", obj.toString())
+		return "<div data-notion-type=\"$t\">$plain</div>"
+	}
 	/**
 	 * 通用块子项获取
 	 * @param blockId Notion 块 ID
@@ -379,10 +413,8 @@ class ENotion(
 
 						"heading_1", "heading_2", "heading_3" -> {
 							val level = type.removePrefix("heading_")
-							val content = renderRichText(block.getJSONObject(type).getJSONArray("rich_text"))
-							htmlBuilder.append("<h").append(level).append(">")
-								.append(content)
-								.append("</h").append(level).append(">")
+							val contentArr = block.getJSONObject(type).getJSONArray("rich_text")
+							htmlBuilder.append(renderHeadingHtml(level, contentArr))
 						}
 
 						"bulleted_list_item", "numbered_list_item" -> {
@@ -393,12 +425,82 @@ class ENotion(
 								currentListType = type
 							}
 							val key = if (type == "bulleted_list_item") "bulleted_list_item" else "numbered_list_item"
-							val content = renderRichText(block.getJSONObject(key).getJSONArray("rich_text"))
-							htmlBuilder.append("<li>").append(content).append("</li>")
+							val contentArr = block.getJSONObject(key).getJSONArray("rich_text")
+							htmlBuilder.append(renderListItemHtml(contentArr))
 						}
 						"quote" -> {
-							val content = renderRichText(block.getJSONObject("quote").getJSONArray("rich_text"))
-							htmlBuilder.append("<blockquote>").append(content).append("</blockquote>")
+							val quoteObj = block.getJSONObject("quote")
+							val content = renderRichText(quoteObj.getJSONArray("rich_text"))
+							htmlBuilder.append("<blockquote>").append(content)
+
+							val qid = block.optString("id", null)
+							if (qid != null) {
+								val qChildren = fetchBlockChildren(qid)
+								var inList: String? = null // "bulleted_list_item" or "numbered_list_item"
+								for (k in 0 until qChildren.length()) {
+									val qc = qChildren.getJSONObject(k)
+									val qct = qc.getString("type")
+									fun closeList() {
+										if (inList == "bulleted_list_item") htmlBuilder.append("</ul>")
+										if (inList == "numbered_list_item") htmlBuilder.append("</ol>")
+										inList = null
+									}
+									when (qct) {
+										"image" -> {
+											closeList()
+											val (purl, caption) = extractImageUrlAndCaption(qc.getJSONObject("image"))
+											htmlBuilder.append("<img src=\"").append(purl)
+												.append("\" alt=\"").append(caption.replace("\"", "&quot;"))
+												.append("\" decoding=\"async\"/>")
+										}
+
+										"paragraph" -> {
+											closeList()
+											val pContent =
+												renderRichText(qc.getJSONObject("paragraph").getJSONArray("rich_text"))
+											if (pContent.isNotBlank()) htmlBuilder.append("<p>").append(pContent)
+												.append("</p>")
+										}
+
+										"code" -> {
+											closeList()
+											val cContent =
+												renderRichText(qc.getJSONObject("code").getJSONArray("rich_text"))
+											htmlBuilder.append("<pre><code>").append(cContent).append("</code></pre>")
+										}
+
+										"heading_1", "heading_2", "heading_3" -> {
+											closeList()
+											val lvl = qct.removePrefix("heading_")
+											val contentArr = qc.getJSONObject(qct).getJSONArray("rich_text")
+											htmlBuilder.append(renderHeadingHtml(lvl, contentArr))
+										}
+
+										"bulleted_list_item", "numbered_list_item" -> {
+											if (inList == null) {
+												htmlBuilder.append(if (qct == "bulleted_list_item") "<ul>" else "<ol>")
+												inList = qct
+											} else if (inList != qct) {
+												closeList()
+												htmlBuilder.append(if (qct == "bulleted_list_item") "<ul>" else "<ol>")
+												inList = qct
+											}
+											val key =
+												if (qct == "bulleted_list_item") "bulleted_list_item" else "numbered_list_item"
+											val contentArr = qc.getJSONObject(key).getJSONArray("rich_text")
+											htmlBuilder.append(renderListItemHtml(contentArr))
+										}
+
+										else -> {
+											htmlBuilder.append(renderGenericBlockHtml(qc))
+										}
+									}
+								}
+								if (inList == "bulleted_list_item") htmlBuilder.append("</ul>")
+								if (inList == "numbered_list_item") htmlBuilder.append("</ol>")
+							}
+
+							htmlBuilder.append("</blockquote>")
 						}
 
 						"callout" -> {
@@ -408,11 +510,7 @@ class ENotion(
 						"divider" -> htmlBuilder.append("<hr/>")
 						"image" -> {
 							val imageObj = block.getJSONObject("image")
-							val purl = if (imageObj.has("file")) imageObj.getJSONObject("file").getString("url")
-							else imageObj.getJSONObject("external").getString("url")
-							val caption = imageObj.optJSONArray("caption")
-								?.joinToString("") { (it as JSONObject).getJSONObject("text").getString("content") }
-								?: ""
+							val (purl, caption) = extractImageUrlAndCaption(imageObj)
 							// 按 Notion 格式控制宽度
 							val fmt = block.optJSONObject("format")
 							val bw = fmt?.optDouble("block_width", -1.0) ?: -1.0
@@ -460,7 +558,9 @@ class ENotion(
 							}
 							htmlBuilder.append("</tbody></table>")
 						}
-						else -> {}
+						else -> {
+							htmlBuilder.append(renderGenericBlockHtml(block))
+						}
 					}
 				}
 				// 结束后关闭列表
@@ -994,7 +1094,9 @@ class ENotion(
 	private fun inlineMarkdownToRichText(raw: String): JSONArray {
 		val rich = JSONArray()
 		var cursor = 0
-		val pattern = Regex("""(\*\*.+?\*\*|\*[^*\s][^*]*?\*|~~[^~]+~~|`[^`]+`|\[[^]]+]\([^)]+\))""")
+		val pattern = Regex(
+			"""(\*\*.+?\*\*|\*[^*\s][^*]*?\*|~~[^~]+~~|`[^`]+`|\[[^]]+]\([^)]+\)|<[A-Za-z][A-Za-z0-9+.-]*:[^>]+>|[A-Za-z][A-Za-z0-9+.-]*:[^\s)<>]+)"""
+		)
 		pattern.findAll(raw).forEach { m ->
 			if (m.range.first > cursor) {
 				val plain = raw.substring(cursor, m.range.first)
@@ -1008,7 +1110,6 @@ class ENotion(
 					val sub = applyStyle(inlineMarkdownToRichText(inner), addBold = true)
 					for (k in 0 until sub.length()) rich.put(sub.getJSONObject(k))
 				}
-
 				token.startsWith("*") -> {
 					val inner = token.removeSurrounding("*")
 					// Recursively parse inner Markdown, then force‑apply italic
@@ -1030,6 +1131,19 @@ class ENotion(
 					val txt = md.groupValues[1]
 					val url = md.groupValues[2]
 					rich.put(buildLinkedRichSpan(txt, url))
+				}
+				else -> {
+					// Angle‑bracket autolinks like <scheme:...>
+					if (token.startsWith("<") && token.endsWith(">")) {
+						val inner = token.substring(1, token.length - 1)
+						rich.put(buildLinkedRichSpan(inner, inner))
+					} else {
+						// Generic scheme autolink: scheme := ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
+						val schemeMatch = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
+						if (schemeMatch.containsMatchIn(token)) {
+							rich.put(buildLinkedRichSpan(token, token))
+						}
+					}
 				}
 			}
 			cursor = m.range.last + 1
@@ -1132,14 +1246,9 @@ class ENotion(
 	}
 
 	private fun normalizeMarkdown(md: String): String {
-		// single pattern with 4 alternations; groups:
-		// 1‑2:  image  alt / url
-		// 3‑4:  Chinese txt / url
-		// 5:    bare url
-		// 6‑7:  link   txt / url
 		val pattern = Regex(
-			"""!\[([^]]*)]\(\s*([^)]+?)\s*\)|【([^】]+)】\s*\[([^]]+)]|\[((?:https?|ftp)://[^\s\]]+)]|\[(.+?)]\(\s*([^)]+?)\s*\)""",
-			setOf(RegexOption.DOT_MATCHES_ALL),
+			"""!\[([^]]*)]\(\s*([^)]+?)\s*\)|【([^】]+)】\s*\[([^]]+)]|\[([A-Za-z][A-Za-z0-9+.-]*:[^\s\]]+)]|\[(.+?)]\(\s*([^)]+?)\s*\)|<([A-Za-z][A-Za-z0-9+.-]*:[^>]+)>|([A-Za-z][A-Za-z0-9+.-]*:[^\s\]]+)""",
+			setOf(RegexOption.DOT_MATCHES_ALL)
 		)
 
 		val sb = StringBuilder()
@@ -1152,18 +1261,25 @@ class ENotion(
 					val url = m.groups[2]!!.value.trim()
 					sb.append("![").append(alt).append("](").append(url).append(")")
 				}
-
 				m.groups[3] != null -> {         // Chinese link
 					val txt = m.groups[3]!!.value
 					val url = m.groups[4]!!.value.trim()
 					sb.append("[").append(txt).append("](").append(url).append(")")
 				}
-
-				m.groups[5] != null -> {         // bare URL
+				m.groups[5] != null -> {         // bare scheme URL in []
 					val url = m.groups[5]!!.value
 					sb.append("[").append(url).append("](").append(url).append(")")
 				}
 
+				m.groups[8] != null -> { // angle-bracket autolink
+					val url = m.groups[8]!!.value
+					sb.append("[").append(url).append("](").append(url).append(")")
+				}
+
+				m.groups[9] != null -> { // bare generic scheme
+					val url = m.groups[9]!!.value
+					sb.append("[").append(url).append("](").append(url).append(")")
+				}
 				else -> {                        // normal link (6‑7)
 					val txt = m.groups[6]!!.value
 					val url = m.groups[7]!!.value.trim()
@@ -1383,22 +1499,36 @@ class ENotion(
 				}
 
 				trimmed.startsWith("> ") -> {
-					blocks.put(
-						JSONObject()
-							.put("object", "block")
-							.put("type", "quote")
-							.put(
-								"quote",
-								JSONObject().put(
-									"rich_text",
-									JSONArray().put(
-										JSONObject()
-											.put("type", "text")
-											.put("text", JSONObject().put("content", trimmed.removePrefix("> ").trim()))
+					val content = trimmed.removePrefix("> ").trim()
+					val imgMatchInQuote = imgPattern.matchEntire(content)
+					if (imgMatchInQuote != null) {
+						val alt = imgMatchInQuote.groupValues[1]
+						val url = imgMatchInQuote.groupValues[2]
+						blocks.put(
+							JSONObject()
+								.put("object", "block")
+								.put("type", "quote")
+								.put(
+									"quote",
+									JSONObject()
+										.put("rich_text", JSONArray())
+										.put("children", JSONArray().put(buildImageBlock(url, alt)))
+								)
+						)
+					} else {
+						blocks.put(
+							JSONObject()
+								.put("object", "block")
+								.put("type", "quote")
+								.put(
+									"quote",
+									JSONObject().put(
+										"rich_text",
+										inlineMarkdownToRichText(content)
 									)
 								)
-							)
-					)
+						)
+					}
 				}
 
 				trimmed.startsWith("- ") || trimmed.startsWith("* ") -> {
@@ -1701,4 +1831,16 @@ class ENotion(
 			if (results.length() > 0) results.getJSONObject(0) else null
 		}
 	}
+}
+
+/**
+ * Helper method to extract image URL and caption from an image block object.
+ */
+private fun extractImageUrlAndCaption(imageObj: JSONObject): Pair<String, String> {
+	val purl = if (imageObj.has("file")) imageObj.getJSONObject("file").getString("url")
+	else imageObj.getJSONObject("external").getString("url")
+	val caption = imageObj.optJSONArray("caption")
+		?.joinToString("") { (it as JSONObject).getJSONObject("text").getString("content") }
+		?: ""
+	return purl to caption
 }
