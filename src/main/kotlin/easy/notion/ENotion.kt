@@ -1095,7 +1095,7 @@ class ENotion(
 		val rich = JSONArray()
 		var cursor = 0
 		val pattern = Regex(
-			"""(\*\*.+?\*\*|\*[^*\s][^*]*?\*|~~[^~]+~~|`[^`]+`|\[[^]]+]\([^)]+\)|<[A-Za-z][A-Za-z0-9+.-]*:[^>]+>|[A-Za-z][A-Za-z0-9+.-]*:[^\s)<>]+)"""
+			"""(\*\*.+?\*\*|\*[^*\s][^*]*?\*|~~[^~]+~~|`[^`]+`|\[[^]]+]\([^)]+\)|<(https?|mailto|tel|ftp|file):[^>]+>|(https?|mailto|tel|ftp|file):[^\s)<>]+)"""
 		)
 		pattern.findAll(raw).forEach { m ->
 			if (m.range.first > cursor) {
@@ -1247,7 +1247,7 @@ class ENotion(
 
 	private fun normalizeMarkdown(md: String): String {
 		val pattern = Regex(
-			"""!\[([^]]*)]\(\s*([^)]+?)\s*\)|【([^】]+)】\s*\[([^]]+)]|\[([A-Za-z][A-Za-z0-9+.-]*:[^\s\]]+)]|\[(.+?)]\(\s*([^)]+?)\s*\)|<([A-Za-z][A-Za-z0-9+.-]*:[^>]+)>|([A-Za-z][A-Za-z0-9+.-]*:[^\s\]]+)""",
+			"""!\[([^]]*)]\(\s*([^)]+?)\s*\)|【([^】]+)】\s*\[([^]]+)]|\[((?:https?|mailto|tel|ftp|file):[^\s\]]+)]|\[(.+?)]\(\s*([^)]+?)\s*\)|<((?:https?|mailto|tel|ftp|file):[^>]+)>|((?:https?|mailto|tel|ftp|file):[^\s\]]+)""",
 			setOf(RegexOption.DOT_MATCHES_ALL)
 		)
 
