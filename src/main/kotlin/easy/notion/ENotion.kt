@@ -43,6 +43,18 @@ class ENotion(
 		.writeTimeout(60, TimeUnit.SECONDS)
 		.build(),
 ) {
+	// --- URL helpers -------------------------------------------------------
+	/** Replace internal whitespace with %20 and trim. */
+	private fun sanitizeUrl(raw: String): String =
+		raw.trim().replace(Regex("\\s+"), "%20")
+
+	/** Basic validator for external HTTP(S) URLs. */
+	private fun isLikelyValidHttpUrl(url: String): Boolean = try {
+		val u = java.net.URI(url)
+		(u.scheme == "http" || u.scheme == "https") && !u.host.isNullOrBlank()
+	} catch (_: Exception) {
+		false
+	}
 	/** Returns a Request.Builder pre‑configured with common Notion headers. */
 	private fun requestBuilder(url: String): Request.Builder =
 		Request.Builder()
@@ -1069,14 +1081,19 @@ class ENotion(
 		url: String,
 		bold: Boolean = false,
 		italic: Boolean = false,
-	): JSONObject = buildRichSpan(text, bold, italic).apply {
-		getJSONObject("text").put(
-			"link",
-			JSONObject().apply {
-				put("type", "url")
-				put("url", url)
-			},
-		)
+	): JSONObject {
+		val sanitized = sanitizeUrl(url)
+		// 若 URL 非法，则降级为普通文本，避免 Notion 校验失败
+		if (!isLikelyValidHttpUrl(sanitized)) return buildRichSpan(text, bold, italic)
+		return buildRichSpan(text, bold, italic).apply {
+			getJSONObject("text").put(
+				"link",
+				JSONObject().apply {
+					put("type", "url")
+					put("url", sanitized)
+				},
+			)
+		}
 	}
 
 	/** Apply additional bold / italic flags to every span in [arr] (mutates in‑place). */
@@ -1155,31 +1172,43 @@ class ENotion(
 		return rich
 	}
 
-	/** Build an image block (external or file) with `alt` as caption. */
-	private fun buildImageBlock(url: String, alt: String = ""): JSONObject = JSONObject().apply {
-		put("object", "block")
-		put("type", "image")
-		put(
-			"image",
-			JSONObject().apply {
-				if (url.startsWith("http")) {
-					put("type", "external")
-					put("external", JSONObject().put("url", url))
-				} else {
-					put("type", "file")
-					put("file", JSONObject().put("url", url))
-				}
+	/** Build an image block (HTTP[S] external). 若 URL 非法则降级为段落文本，避免 400。 */
+	private fun buildImageBlock(url: String, alt: String = ""): JSONObject {
+		val sanitized = sanitizeUrl(url)
+		if (!isLikelyValidHttpUrl(sanitized)) {
+			// 降级为段落，保留替代文本，避免 Notion 返回 validation_error
+			return JSONObject().apply {
+				put("object", "block")
+				put("type", "paragraph")
 				put(
-					"caption",
-					JSONArray().put(
-						JSONObject().apply {
-							put("type", "text")
-							put("text", JSONObject().put("content", alt))
-						},
+					"paragraph",
+					JSONObject().put(
+						"rich_text",
+						JSONArray().put(buildRichSpan(if (alt.isNotBlank()) alt else "[invalid image url]"))
 					),
 				)
-			},
-		)
+			}
+		}
+		return JSONObject().apply {
+			put("object", "block")
+			put("type", "image")
+			put(
+				"image",
+				JSONObject().apply {
+					put("type", "external")
+					put("external", JSONObject().put("url", sanitized))
+					put(
+						"caption",
+						JSONArray().put(
+							JSONObject().apply {
+								put("type", "text")
+								put("text", JSONObject().put("content", alt))
+							},
+						),
+					)
+				},
+			)
+		}
 	}
 
 	/** Build a table_row block with plain‑text cells. */
@@ -1258,12 +1287,12 @@ class ENotion(
 			when {
 				m.groups[1] != null -> {         // image
 					val alt = m.groups[1]!!.value
-					val url = m.groups[2]!!.value.trim()
+					val url = sanitizeUrl(m.groups[2]!!.value)
 					sb.append("![").append(alt).append("](").append(url).append(")")
 				}
 				m.groups[3] != null -> {         // Chinese link
 					val txt = m.groups[3]!!.value
-					val url = m.groups[4]!!.value.trim()
+					val url = sanitizeUrl(m.groups[4]!!.value)
 					sb.append("[").append(txt).append("](").append(url).append(")")
 				}
 				m.groups[5] != null -> {         // bare scheme URL in []
@@ -1282,7 +1311,7 @@ class ENotion(
 				}
 				else -> {                        // normal link (6‑7)
 					val txt = m.groups[6]!!.value
-					val url = m.groups[7]!!.value.trim()
+					val url = sanitizeUrl(m.groups[7]!!.value)
 					sb.append("[").append(txt).append("](").append(url).append(")")
 				}
 			}
