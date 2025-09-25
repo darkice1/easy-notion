@@ -12,16 +12,15 @@
 
 - 源码：`src/main/kotlin/easy/notion/`（库代码），核心文件：`ENotion.kt`、`BlockTransformer.kt`。
 - 测试/示例：`src/test/kotlin/`（如 `TestNotionTools.kt`），更偏向手动验证，建议逐步迁移为单元测试。
-- 构建文件：Gradle 为主（`build.gradle.kts`），Maven 可选（`pom.xml`）。
+- 构建文件：Gradle 为主（`build.gradle.kts`）。
 - 运行环境：JDK 21，Kotlin 2.1.x。
 
 ## 构建、测试与本地开发命令
 
 - 构建（Gradle）：`./gradlew build` —— 编译并运行测试，生成 JAR。
 - 仅运行测试：`./gradlew test`
-- 安装到本地 Maven：`./gradlew publishMavenJavaPublicationToMavenLocal`（或 `./gradlew publiclocal`）。
+- 安装到本地  `./gradlew publiclocal`）。
 - 发布到 Sonatype（需凭据）：`./gradlew publishAndCloseSonatype` / `./gradlew release`。
-- Maven 等价命令（可选）：`mvn -q package`、`mvn test`、`mvn install`。
 
 ## 编码风格与命名约定
 
@@ -42,6 +41,10 @@
 - 使用 Conventional Commits：`feat:`、`fix:`、`chore:`、`docs:`、`refactor:`、`test:` 等。示例：
   `feat(notion): add Markdown to blocks`。
 - PR 需包含：清晰描述、关联 issue、必要的前后对比（示例 JSON/HTML）、测试或覆盖性说明、涉及 API 变更时同步更新 README/本文件。
+- 修改公共 API 或核心方法（签名或行为）时：
+	- 同步更新英文文档 `README.md` 与中文文档 `README_zh-CN.md` 的相关章节与示例；
+	- 在 PR 描述中明确列出影响范围与迁移建议；
+	- 若需要，添加/更新相应的测试用例。
 - 提交前请确保本地 `./gradlew build` 通过。
 
 ## 安全与配置

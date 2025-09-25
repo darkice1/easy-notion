@@ -1,5 +1,7 @@
 # ENotion
 
+[中文文档](README_zh-CN.md)
+
 `ENotion` is a Kotlin library for interacting with the Notion API, supporting the conversion of Notion database content into HTML format.
 
 ## Features
@@ -22,6 +24,11 @@
   - Converts full Markdown (headings 1‑3, paragraphs, images, tables, lists, block quotes, horizontal rules, inline *
     *bold** / *italic* / `code`, links, strike‑through) into native Notion blocks on‑the‑fly.
   - Images inside tables are automatically extracted and appended with captions to satisfy Notion API constraints.
+  - Supports an optional high‑fidelity converter via Node’s `@tryfabric/martian` when available; otherwise falls back to
+    the built‑in Kotlin converter.
+
+- **HTML Rendering & Safety**  
+  HTML output from `getDataBase` escapes text and attributes and uses `rel="noopener noreferrer"` on links.
 
 - **Workspace Search** – `findNotionDatabase`  
   Locate a database by its exact title and return its ID.
@@ -46,11 +53,13 @@
 Add `ENotion` to your project and initialize it with your Notion API key:
 
 ```kotlin
-import easy.config.Config
 import easy.notion.ENotion
+import java.io.FileInputStream
+import java.util.Properties
 
 fun main() {
-	val notion = ENotion(Config.getProperty("NOTIONKEY").toString())
+	val props = Properties().apply { load(FileInputStream("config.properties")) }
+	val notion = ENotion(props.getProperty("NOTIONKEY"))
 	println(notion.getDataBase("your_database_id"))
 }
 ```
@@ -165,10 +174,18 @@ for direct embedding.
 
 ## Configuration
 
-Create a `config.txt` file in the project root directory and add the following content:
+Create a `config.properties` file in the project root directory and add the following content:
 
 ```
 NOTIONKEY=your_notion_api_key
+# Optional for examples
+# DATABASEID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Optional: for high‑fidelity Markdown conversion, install Node and Martian globally:
+
+```
+npm i -g @tryfabric/martian
 ```
 
 ## Dependencies
@@ -176,27 +193,20 @@ NOTIONKEY=your_notion_api_key
 - **Language**: Kotlin
 - **HTTP**: OkHttp 4.x
 - **JSON**: org.json
-- **Build Tool**: Maven (or Gradle)
+- **Build Tool**: Gradle (Maven optional)
 
 ## Development and Testing
 
-### Testing Tool
+- Build: `./gradlew build`
+- Run tests only: `./gradlew test`
+- Publish to local Maven: `./gradlew publishMavenJavaPublicationToMavenLocal`
 
-Use `TestNotionTools` for testing:
-
-```kotlin
-object TestNotionTools {
-	@JvmStatic
-	fun main(args: Array<String>) {
-		val n = ENotion(Config.getProperty("NOTIONKEY").toString())
-		print(n.getDataBase("1d800250dfa5805e8f45dfcd67d37e60"))
-	}
-}
-```
+For a quick online example (manual, not a unit test), run `src/test/kotlin/TestNotionTools.kt` in your IDE with a valid
+`config.properties` in the project root.
 
 ## Notes
 
-- Ensure that the `config.txt` file is not committed to version control (already configured in `.gitignore`).
+- Ensure that the `config.properties` file is not committed to version control (already configured in `.gitignore`).
 - Make sure the Notion API key and database ID are valid before use.
 
 ## License
