@@ -14,6 +14,7 @@
 package easy.notion
 
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -42,7 +43,46 @@ class ENotion(
 		.readTimeout(60, TimeUnit.SECONDS)
 		.writeTimeout(60, TimeUnit.SECONDS)
 		.build(),
+	/**
+	 * 可选的 data: 图片上传回调。
+	 *
+	 * 当 markdownContent 中出现 `data:image/...;base64,...` 时，库会调用该回调将图片字节上传到
+	 * 你选择的托管位置（例如：自建对象存储、GitHub、自定义网关）。
+	 *
+	 * 约定：
+	 * - mime: 解析自 data URI（例如 `image/png`）。
+	 * - data: 图片二进制内容。
+	 * - suggestedName: 依据 alt 文本与 mime 推断的建议文件名（如 `image.png`）。
+	 *
+	 * 返回：`DataImageUploadResult`。
+	 * - 若返回 `fileUploadId`，库将生成 `file_upload` 类型的图片块（推荐：直接使用 Notion /v1/file_uploads 接口）。
+	 * - 若返回 `externalUrl`，需确保可公开访问且为 http(s)。
+	 * - 若返回 `null` 或抛异常，则回退为段落文本以避免 Notion 400。
+	 *
+	 * 若未提供回调，库默认使用 Notion 的 Direct Upload（/v1/file_uploads + /send）将图片托管到 Notion。
+	 */
+	private val dataImageUploader: ((mime: String, data: ByteArray, suggestedName: String?) -> DataImageUploadResult?)? = null,
 ) {
+	/** data: 图片上传的返回值。exactly one of [externalUrl], [fileUploadId] must be non-null. */
+	data class DataImageUploadResult(
+		val externalUrl: String? = null,
+		val fileUploadId: String? = null,
+	) {
+		init {
+			require((externalUrl != null) xor (fileUploadId != null)) {
+				"DataImageUploadResult 需要在 externalUrl 与 fileUploadId 之间二选一"
+			}
+		}
+	}
+
+	private data class ImageBlockSource(
+		val externalUrl: String? = null,
+		val fileUploadId: String? = null,
+	) {
+		init {
+			require((externalUrl != null) xor (fileUploadId != null))
+		}
+	}
 	// --- URL helpers -------------------------------------------------------
 	/** Replace internal whitespace with %20 and trim. */
 	private fun sanitizeUrl(raw: String): String =
@@ -54,6 +94,88 @@ class ENotion(
 		(u.scheme == "http" || u.scheme == "https") && !u.host.isNullOrBlank()
 	} catch (_: Exception) {
 		false
+	}
+
+	// --- data URI helpers ---------------------------------------------------
+	/** 简易解析 `data:<mime>;base64,<payload>`，返回 (mime, bytes)，不符合则返回 null。 */
+	private fun parseDataImage(dataUri: String): Pair<String, ByteArray>? {
+		val m = Regex("^data:([^;]+);base64,(.+)$", RegexOption.IGNORE_CASE).find(dataUri.trim())
+			?: return null
+		val mime = m.groupValues[1].lowercase()
+		return try {
+			val payload = java.util.Base64.getDecoder().decode(m.groupValues[2])
+			mime to payload
+		} catch (_: Exception) {
+			null
+		}
+	}
+
+	/** 基于 mime 与 alt 生成建议文件名（不含路径）。 */
+	private fun suggestFileName(alt: String, mime: String): String {
+		val safeAlt = alt.ifBlank { "image" }
+			.replace(Regex("[^A-Za-z0-9._-]+"), "_")
+			.trim('_')
+			.ifBlank { "image" }
+		val ext = when (mime.lowercase()) {
+			"image/png" -> "png"
+			"image/jpeg", "image/jpg" -> "jpg"
+			"image/gif" -> "gif"
+			"image/webp" -> "webp"
+			"image/svg+xml" -> "svg"
+			else -> "bin"
+		}
+		return if (safeAlt.endsWith(".$ext", ignoreCase = true)) safeAlt else "$safeAlt.$ext"
+	}
+
+	/**
+	 * 使用 Notion 的 Direct Upload 流程上传小于 20 MB 的图片，并返回 file_upload ID。
+	 *
+	 * 步骤：
+	 * 1. POST /v1/file_uploads 获取上传 URL；
+	 * 2. POST multipart/form-data 至 upload_url 发送二进制；
+	 * 3. 返回 file_upload ID，供后续图片块引用。
+	 */
+	private fun uploadDataImageToNotion(mime: String, data: ByteArray, fileName: String): DataImageUploadResult? {
+		return try {
+			val createPayload = JSONObject()
+				.put("filename", fileName)
+				.put("content_type", mime)
+
+			val createReq = requestBuilder("https://api.notion.com/v1/file_uploads")
+				.post(createPayload.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+				.build()
+
+			val (uploadId, uploadUrl) = client.newCall(createReq).execute().use { resp ->
+				if (!resp.isSuccessful) return null
+				val body = resp.body?.string().orEmpty()
+				val json = JSONObject(body.ifBlank { "{}" })
+				val id = json.optString("id")
+				val url = json.optString("upload_url")
+				if (id.isNullOrBlank() || url.isNullOrBlank()) return null
+				id to url
+			}
+
+			val multipartBody = MultipartBody.Builder()
+				.setType(MultipartBody.FORM)
+				.addFormDataPart(
+					"file",
+					fileName,
+					data.toRequestBody(mime.toMediaTypeOrNull()),
+				)
+				.build()
+
+			val sendReq = requestBuilder(uploadUrl)
+				.post(multipartBody)
+				.build()
+
+			client.newCall(sendReq).execute().use { resp ->
+				if (!resp.isSuccessful) return null
+			}
+
+			DataImageUploadResult(fileUploadId = uploadId)
+		} catch (_: Exception) {
+			null
+		}
 	}
 	/** Returns a Request.Builder pre‑configured with common Notion headers. */
 	private fun requestBuilder(url: String): Request.Builder =
@@ -1172,43 +1294,76 @@ class ENotion(
 		return rich
 	}
 
-	/** Build an image block (HTTP[S] external). 若 URL 非法则降级为段落文本，避免 400。 */
+	/** 构建图片块：优先处理 data URI → Notion Direct Upload / 自定义上传；其次处理 HTTP(S) 外链。 */
 	private fun buildImageBlock(url: String, alt: String = ""): JSONObject {
-		val sanitized = sanitizeUrl(url)
-		if (!isLikelyValidHttpUrl(sanitized)) {
-			// 降级为段落，保留替代文本，避免 Notion 返回 validation_error
-			return JSONObject().apply {
+		val source = resolveImageBlockSource(url, alt)
+			?: return JSONObject().apply {
 				put("object", "block")
 				put("type", "paragraph")
 				put(
 					"paragraph",
 					JSONObject().put(
 						"rich_text",
-						JSONArray().put(buildRichSpan(if (alt.isNotBlank()) alt else "[invalid image url]"))
+						JSONArray().put(buildRichSpan(alt.ifBlank { "[invalid image url]" }))
 					),
 				)
 			}
-		}
+
+		val captionArray = JSONArray().put(
+			JSONObject().apply {
+				put("type", "text")
+				put("text", JSONObject().put("content", alt))
+			},
+		)
+
 		return JSONObject().apply {
 			put("object", "block")
 			put("type", "image")
 			put(
 				"image",
 				JSONObject().apply {
-					put("type", "external")
-					put("external", JSONObject().put("url", sanitized))
-					put(
-						"caption",
-						JSONArray().put(
-							JSONObject().apply {
-								put("type", "text")
-								put("text", JSONObject().put("content", alt))
-							},
-						),
-					)
+					when {
+						source.fileUploadId != null -> {
+							put("type", "file_upload")
+							put("file_upload", JSONObject().put("id", source.fileUploadId))
+						}
+
+						source.externalUrl != null -> {
+							put("type", "external")
+							put("external", JSONObject().put("url", source.externalUrl))
+						}
+					}
+					put("caption", captionArray)
 				},
 			)
 		}
+	}
+
+	private fun resolveImageBlockSource(url: String, alt: String): ImageBlockSource? {
+		val trimmed = url.trim()
+		if (trimmed.startsWith("data:", ignoreCase = true)) {
+			val parsed = parseDataImage(trimmed) ?: return null
+			val (mime, bytes) = parsed
+			val suggestedName = suggestFileName(alt, mime)
+			val result = if (dataImageUploader != null) {
+				runCatching { dataImageUploader!!.invoke(mime, bytes, suggestedName) }.getOrNull()
+			} else {
+				uploadDataImageToNotion(mime, bytes, suggestedName)
+			}
+
+			return when {
+				result?.fileUploadId != null -> ImageBlockSource(fileUploadId = result.fileUploadId)
+				result?.externalUrl != null -> {
+					val sanitized = sanitizeUrl(result.externalUrl)
+					if (isLikelyValidHttpUrl(sanitized)) ImageBlockSource(externalUrl = sanitized) else null
+				}
+
+				else -> null
+			}
+		}
+
+		val sanitized = sanitizeUrl(trimmed)
+		return if (isLikelyValidHttpUrl(sanitized)) ImageBlockSource(externalUrl = sanitized) else null
 	}
 
 	/** Build a table_row block with plain‑text cells. */

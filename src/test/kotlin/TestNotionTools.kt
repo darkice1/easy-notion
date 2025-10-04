@@ -15,9 +15,7 @@ object TestNotionTools {
 		val n = ENotion(apikey)
 		n.insertRecord(
 			databaseid, markdownContent = """
-![](https://m.media-amazon.com/images/I/41K9LB4hoxL._SL500_.jpg)
-![](https://m.media-amazon.com/images/I/51xVqNkRH8L._SL500_.jpg)
-![](https://m.media-amazon.com/images/I/41ekKOkfNsL._SL500_.jpg)
+![gradient-640x320](data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc2NDAnIGhlaWdodD0nMzIwJz4KICA8ZGVmcz4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0nZycgeDE9JzAlJyB5MT0nMCUnIHgyPScxMDAlJyB5Mj0nMCUnPgogICAgICA8c3RvcCBvZmZzZXQ9JzAlJyBzdG9wLWNvbG9yPSIjMGVhNWU5Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0nNTAlJyBzdG9wLWNvbG9yPSIjOGI1Y2Y2Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0nMTAwJScgc3RvcC1jb2xvcj0iI2VmNDQ0NCIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICA8L2RlZnM+CiAgPHJlY3Qgd2lkdGg9JzY0MCcgaGVpZ2h0PSczMjAnIGZpbGw9J3VybCgjZyknLz4KPC9zdmc+)
 """.trimIndent(),
 			"title" to Date()
 		)

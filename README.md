@@ -27,6 +27,11 @@
   - Supports an optional high‑fidelity converter via Node’s `@tryfabric/martian` when available; otherwise falls back to
     the built‑in Kotlin converter.
 
+- **Data image auto‑upload**  
+  Markdown `data:image/...;base64,...` blobs are uploaded automatically via Notion's Direct Upload API and rendered as
+  `file_upload` image blocks. Optionally provide a `dataImageUploader` callback to override the behaviour and return an
+  `externalUrl` or `fileUploadId`. On failure the content falls back to a paragraph to avoid Notion validation errors.
+
 - **HTML Rendering & Safety**  
   HTML output from `getDataBase` escapes text and attributes and uses `rel="noopener noreferrer"` on links.
 
@@ -112,6 +117,16 @@ notion.updateRecord(
   markdownContent = "- **现价**：￥208",
   "Level" to "ERROR",
   "Message" to "Oops, something went wrong",
+)
+
+// Optional: data image auto‑upload (custom uploader example)
+val notionWithUploader = ENotion(
+	apikey = props.getProperty("NOTIONKEY"),
+	dataImageUploader = { mime, bytes, suggestedName ->
+		// Upload bytes to your hosting and return an https URL. Example only:
+		val url = myUpload(bytes, suggestedName ?: "image", mime) // implement yourself
+		if (url != null) ENotion.DataImageUploadResult(externalUrl = url) else null
+	}
 )
 ```
 

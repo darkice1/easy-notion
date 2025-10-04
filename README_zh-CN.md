@@ -20,6 +20,13 @@
 	- 表格中的图片会被提取并作为图片块附加，且保留标题说明。
 	- 若本机安装了 Node 的 `@tryfabric/martian`，优先使用其进行高保真转换；否则回退到内置转换器。
 
+- data 图片自动上传
+	- 默认使用 Notion 官方的 Direct Upload 流程（`/v1/file_uploads` + `/send`），data URI 会自动转成 `file_upload`
+	  图片块，无需额外配置。
+	- 可选传入 `dataImageUploader` 自定义上传逻辑：返回 `DataImageUploadResult(fileUploadId = ...)` 或
+	  `DataImageUploadResult(externalUrl = ...)`。
+	- 若自定义回调返回 `null` 或上传失败，将优雅降级为段落文本，避免 Notion 400。
+
 - HTML 渲染与安全  
   `getDataBase` 输出的 HTML 对文本与属性进行安全转义，链接使用 `rel="noopener noreferrer"`。
 
@@ -72,6 +79,16 @@ notion.updateRecord(
   markdownContent = "- **现价**：￥208",
   "Level" to "ERROR",
 )
+
+// 可选：data 图片自动上传（示例：自定义上传回调）
+val notionWithUploader = ENotion(
+	apikey = props.getProperty("NOTIONKEY"),
+	dataImageUploader = { mime, bytes, suggestedName ->
+		// 将 bytes 上传到你的托管（需返回 https 外链）。下面仅为示意：
+		val url = myUpload(bytes, suggestedName ?: "image", mime) // 自行实现
+		if (url != null) ENotion.DataImageUploadResult(externalUrl = url) else null
+	}
+)
 ```
 
 ## 配置
@@ -118,4 +135,3 @@ npm i -g @tryfabric/martian
 ## 许可
 
 MIT License
-
