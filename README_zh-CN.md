@@ -30,6 +30,10 @@
 - HTML 渲染与安全  
   `getDataBase` 输出的 HTML 对文本与属性进行安全转义，链接使用 `rel="noopener noreferrer"`。
 
+- 视频块渲染  
+  `getDataBase` 支持渲染 Notion `video` 块：默认宽高为 640x360，本地文件以 `<video>` 播放，YouTube/Vimeo
+  外链自动转成可嵌入的 `<iframe>`，其它平台降级为带外链的文本。
+
 - 工作区搜索 – `findNotionDatabase`  
   按标题精确查找数据库并返回 ID。
 

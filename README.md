@@ -35,6 +35,11 @@
 - **HTML Rendering & Safety**  
   HTML output from `getDataBase` escapes text and attributes and uses `rel="noopener noreferrer"` on links.
 
+- **Video Blocks**  
+  `getDataBase` renders Notion `video` blocks with a default 640x360 footprint, streaming uploaded files via `<video>`
+  and auto-converting YouTube/Vimeo links into embeddable `<iframe>` players (falling back to external links for other
+  providers).
+
 - **Workspace Search** – `findNotionDatabase`  
   Locate a database by its exact title and return its ID.
 
