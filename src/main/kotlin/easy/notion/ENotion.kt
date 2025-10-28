@@ -29,11 +29,15 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.URI
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import easy.notion.media.DataImageUploadResult as MediaDataImageUploadResult
+
+private const val DEFAULT_VIDEO_WIDTH = 640
+private const val DEFAULT_VIDEO_HEIGHT = 360
 
 /**
  * Lightweight wrapper for selected Notion REST API endpoints.
@@ -440,6 +444,10 @@ class ENotion(
 							htmlBuilder.append("<div class=\"callout\">").append(content).append("</div>")
 						}
 						"divider" -> htmlBuilder.append("<hr/>")
+						"video" -> {
+							val videoHtml = renderVideoBlock(block)
+							if (videoHtml.isNotEmpty()) htmlBuilder.append(videoHtml)
+						}
 						"image" -> {
 							val imageObj = block.getJSONObject("image")
 							val (purl, caption) = extractImageUrlAndCaption(imageObj)
@@ -1162,4 +1170,147 @@ private fun extractImageUrlAndCaption(imageObj: JSONObject): Pair<String, String
 		?.joinToString("") { (it as JSONObject).getJSONObject("text").getString("content") }
 		?: ""
 	return purl to caption
+}
+
+private fun renderVideoBlock(block: JSONObject): String {
+	val videoObj = block.optJSONObject("video") ?: return ""
+	val captionHtml = videoObj.optJSONArray("caption")
+		?.let { renderRichText(it) }
+		?.takeIf { it.isNotBlank() }
+
+	val format = block.optJSONObject("format")
+	val rawWidth = format?.optDouble("block_width", -1.0)?.takeIf { it > 0 }?.toInt()
+	val rawHeight = format?.optDouble("block_height", -1.0)?.takeIf { it > 0 }?.toInt()
+	val (resolvedWidth, resolvedHeight) = when {
+		rawWidth != null && rawHeight != null -> rawWidth to rawHeight
+		rawWidth != null -> rawWidth to (rawWidth * DEFAULT_VIDEO_HEIGHT / DEFAULT_VIDEO_WIDTH).coerceAtLeast(1)
+		rawHeight != null -> (rawHeight * DEFAULT_VIDEO_WIDTH / DEFAULT_VIDEO_HEIGHT).coerceAtLeast(1) to rawHeight
+		else -> DEFAULT_VIDEO_WIDTH to DEFAULT_VIDEO_HEIGHT
+	}
+	val styleAttr = "width:${resolvedWidth}px;height:${resolvedHeight}px;"
+
+	val contentHtml = when (videoObj.optString("type")) {
+		"file" -> {
+			val fileUrl = videoObj.optJSONObject("file")?.optString("url")
+				?.takeIf { it.isNotBlank() } ?: return ""
+			val safeUrl = fileUrl.replace("\"", "&quot;")
+			buildString {
+				append("<video src=\"").append(safeUrl)
+					.append("\" controls preload=\"metadata\" width=\"").append(resolvedWidth)
+					.append("\" height=\"").append(resolvedHeight).append("\"")
+				if (styleAttr.isNotEmpty()) append(" style=\"").append(styleAttr).append("\"")
+				append("></video>")
+			}
+		}
+
+		"external" -> {
+			val rawUrl = videoObj.optJSONObject("external")?.optString("url")
+				?.takeIf { it.isNotBlank() } ?: return ""
+			val embedInfo = resolveExternalVideoEmbed(rawUrl)
+			if (embedInfo != null) {
+				val safeEmbedUrl = embedInfo.embedUrl.replace("\"", "&quot;")
+				buildString {
+					append("<iframe src=\"").append(safeEmbedUrl).append("\" frameborder=\"0\"")
+						.append(" width=\"").append(resolvedWidth).append("\" height=\"").append(resolvedHeight).append("\"")
+					if (styleAttr.isNotEmpty()) append(" style=\"").append(styleAttr).append("\"")
+					embedInfo.allow?.let { append(" allow=\"").append(it).append("\"") }
+					if (embedInfo.allowFullScreen) append(" allowfullscreen")
+					append(" loading=\"lazy\"></iframe>")
+				}
+			} else {
+				val safeUrl = rawUrl.replace("\"", "&quot;")
+				buildString {
+					append("<a href=\"").append(safeUrl)
+						.append("\" target=\"_blank\" rel=\"noopener noreferrer\">")
+						.append(safeUrl)
+						.append("</a>")
+				}
+			}
+		}
+
+		else -> ""
+	}
+
+	if (contentHtml.isBlank()) return ""
+
+	return buildString {
+		append("<figure class=\"notion-video\">")
+		append(contentHtml)
+		captionHtml?.let {
+			append("<figcaption>").append(it).append("</figcaption>")
+		}
+		append("</figure>")
+	}
+}
+
+private data class ExternalVideoEmbed(
+	val embedUrl: String,
+	val allow: String? = null,
+	val allowFullScreen: Boolean = true,
+)
+
+private fun resolveExternalVideoEmbed(rawUrl: String): ExternalVideoEmbed? {
+	val uri = runCatching { URI(rawUrl) }.getOrNull() ?: return null
+	val host = uri.host?.lowercase() ?: return null
+
+	return when {
+		host.contains("youtube.com") || host.contains("youtu.be") -> {
+			val videoId = extractYouTubeId(uri)
+			videoId?.let {
+				ExternalVideoEmbed(
+					embedUrl = "https://www.youtube.com/embed/$it",
+					allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
+					allowFullScreen = true,
+				)
+			}
+		}
+
+		host.contains("vimeo.com") -> {
+			val videoId = extractVimeoId(uri)
+			videoId?.let {
+				ExternalVideoEmbed(
+					embedUrl = "https://player.vimeo.com/video/$it",
+					allow = "autoplay; fullscreen; picture-in-picture",
+					allowFullScreen = true,
+				)
+			}
+		}
+
+		else -> null
+	}
+}
+
+private fun extractYouTubeId(uri: URI): String? {
+	val host = uri.host?.lowercase() ?: return null
+	val path = uri.path ?: ""
+
+	return when {
+		host.contains("youtu.be") -> path.trim('/').substringBefore('/').substringBefore('?')
+		path.startsWith("/embed/") -> path.removePrefix("/embed/").substringBefore('/').substringBefore('?')
+		path.startsWith("/shorts/") -> path.removePrefix("/shorts/").substringBefore('/').substringBefore('?')
+		else -> {
+			val query = uri.query ?: return null
+			query.split("&")
+				.mapNotNull { kv ->
+					val idx = kv.indexOf('=')
+					if (idx <= 0) null else kv.take(idx) to kv.substring(idx + 1)
+				}
+				.firstOrNull { (key, _) -> key == "v" }
+				?.second
+		}
+	}?.takeIf { it.isNotBlank() }
+}
+
+private fun extractVimeoId(uri: URI): String? {
+	val path = uri.path ?: return null
+	val segments = path.trim('/').split('/').filter { it.isNotBlank() }
+	if (segments.isEmpty()) return null
+
+	val candidate = segments
+		.asReversed()
+		.firstOrNull { segment -> segment.all { it.isDigit() } }
+		?: return null
+
+	val id = candidate.substringBefore('?')
+	return id.takeIf { it.isNotBlank() && id.all { ch -> ch.isDigit() } }
 }
