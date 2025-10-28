@@ -41,6 +41,8 @@
 - 使用 Conventional Commits：`feat:`、`fix:`、`chore:`、`docs:`、`refactor:`、`test:` 等。示例：
   `feat(notion): add Markdown to blocks`。
 - PR 需包含：清晰描述、关联 issue、必要的前后对比（示例 JSON/HTML）、测试或覆盖性说明、涉及 API 变更时同步更新 README/本文件。
+- 每次功能变更需同步更新 `README.md` 与 `README_zh-CN.md` 的相关内容，保持双语文档一致。
+- 每次功能变更需同步更新 `CHANGELOG.md`，并按日期倒序记录最新变更。
 - 修改公共 API 或核心方法（签名或行为）时：
 	- 同步更新英文文档 `README.md` 与中文文档 `README_zh-CN.md` 的相关章节与示例；
 	- 在 PR 描述中明确列出影响范围与迁移建议；

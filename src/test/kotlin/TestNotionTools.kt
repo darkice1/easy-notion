@@ -1,4 +1,6 @@
 import easy.notion.ENotion
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.FileInputStream
 import java.util.*
 
@@ -13,13 +15,14 @@ object TestNotionTools {
 		val apikey = prop.getProperty("NOTIONKEY").toString()
 		val databaseid = prop.getProperty("DATABASEID").toString()
 		val n = ENotion(apikey)
-		n.insertRecord(
-			databaseid, markdownContent = """
-![gradient-640x320](data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc2NDAnIGhlaWdodD0nMzIwJz4KICA8ZGVmcz4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0nZycgeDE9JzAlJyB5MT0nMCUnIHgyPScxMDAlJyB5Mj0nMCUnPgogICAgICA8c3RvcCBvZmZzZXQ9JzAlJyBzdG9wLWNvbG9yPSIjMGVhNWU5Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0nNTAlJyBzdG9wLWNvbG9yPSIjOGI1Y2Y2Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0nMTAwJScgc3RvcC1jb2xvcj0iI2VmNDQ0NCIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICA8L2RlZnM+CiAgPHJlY3Qgd2lkdGg9JzY0MCcgaGVpZ2h0PSczMjAnIGZpbGw9J3VybCgjZyknLz4KPC9zdmc+)
-""".trimIndent(),
-			"title" to Date()
-		)
+		/*		n.insertRecord(
+					databaseid, markdownContent = """
+		![gradient-640x320](data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc2NDAnIGhlaWdodD0nMzIwJz4KICA8ZGVmcz4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0nZycgeDE9JzAlJyB5MT0nMCUnIHgyPScxMDAlJyB5Mj0nMCUnPgogICAgICA8c3RvcCBvZmZzZXQ9JzAlJyBzdG9wLWNvbG9yPSIjMGVhNWU5Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0nNTAlJyBzdG9wLWNvbG9yPSIjOGI1Y2Y2Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0nMTAwJScgc3RvcC1jb2xvcj0iI2VmNDQ0NCIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICA8L2RlZnM+CiAgPHJlY3Qgd2lkdGg9JzY0MCcgaGVpZ2h0PSczMjAnIGZpbGw9J3VybCgjZyknLz4KPC9zdmc+)
+		""".trimIndent(),
+					"title" to Date()
+				)*/
 
+//		println(n.getDataBase(databaseid,1))
 //		println(n.findNotionDatabase("Neo-WordPress"))
 //		println(pages)
 //		println(n.insertRecord(databaseid,"wpid" to "${System.currentTimeMillis()}"))
@@ -32,13 +35,13 @@ object TestNotionTools {
 //			)
 //		)
 
-		/*		val sorts = JSONArray().apply {
+		val sorts = JSONArray().apply {
 					put(JSONObject().apply {
 						put("timestamp", "last_edited_time")  // 系统时间戳排序
 						put("direction", "descending")
 					})
 				}
-				val jsonarr = n.getDataBase(databaseid, sorts = sorts)
-				println(jsonarr.toString())*/
+		val jsonarr = n.getDataBase(databaseid, 1, sorts = sorts)
+		println(jsonarr.toString())
 	}
 }
