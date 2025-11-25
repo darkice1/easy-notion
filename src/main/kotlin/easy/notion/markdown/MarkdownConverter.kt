@@ -15,7 +15,7 @@ internal class MarkdownConverter(
 
 	fun markdownToNotionBlocks(markdown: String): JSONArray {
 		if (markdown.isBlank()) return JSONArray()
-		return try {
+		val blocks = try {
 			val js = """
                 const { markdownToBlocks } = require('@tryfabric/martian');
                 const fs = require('fs');
@@ -39,6 +39,8 @@ internal class MarkdownConverter(
 		} catch (_: Exception) {
 			parseMarkdownToBlocks(markdown)
 		}
+		sanitizeCodeBlocks(blocks)
+		return blocks
 	}
 
 	private fun parseMarkdownToBlocks(markdown: String): JSONArray {
@@ -133,7 +135,7 @@ internal class MarkdownConverter(
 							.put(
 								"code",
 								JSONObject()
-									.put("language", codeLanguage.ifBlank { "plain text" })
+									.put("language", normalizeCodeLanguage(codeLanguage))
 									.put(
 										"rich_text",
 										JSONArray().put(
@@ -335,6 +337,33 @@ internal class MarkdownConverter(
 		}
 	}
 
+	private fun sanitizeCodeBlocks(blocks: JSONArray) {
+		for (idx in 0 until blocks.length()) {
+			val block = blocks.optJSONObject(idx) ?: continue
+			sanitizeCodeBlock(block)
+		}
+	}
+
+	private fun sanitizeCodeBlock(block: JSONObject) {
+		val type = block.optString("type")
+		if (type == "code") {
+			val codeObj = block.optJSONObject("code") ?: JSONObject().also { block.put("code", it) }
+			val normalized = normalizeCodeLanguage(codeObj.optString("language"))
+			codeObj.put("language", normalized)
+		}
+
+		block.optJSONArray("children")?.let { sanitizeCodeBlocks(it) }
+		block.optJSONObject(type)?.optJSONArray("children")?.let { sanitizeCodeBlocks(it) }
+	}
+
+	private fun normalizeCodeLanguage(raw: String): String {
+		val trimmed = raw.trim()
+		if (trimmed.isEmpty()) return "plain text"
+		val lowered = trimmed.lowercase()
+		val resolved = LANGUAGE_ALIASES[lowered] ?: lowered
+		return if (resolved in VALID_CODE_LANGUAGES) resolved else "plain text"
+	}
+
 	private fun buildHeadingBlock(type: String, contentArr: JSONArray): JSONObject =
 		JSONObject()
 			.put("object", "block")
@@ -468,5 +497,117 @@ internal class MarkdownConverter(
 			if (rest.isNotEmpty()) rich.put(buildRichSpan(rest))
 		}
 		return rich
+	}
+
+	private companion object {
+		private val VALID_CODE_LANGUAGES = setOf(
+			"abap",
+			"abc",
+			"agda",
+			"arduino",
+			"ascii art",
+			"assembly",
+			"bash",
+			"basic",
+			"bnf",
+			"c",
+			"c#",
+			"c++",
+			"clojure",
+			"coffeescript",
+			"coq",
+			"css",
+			"dart",
+			"dhall",
+			"diff",
+			"docker",
+			"ebnf",
+			"elixir",
+			"elm",
+			"erlang",
+			"f#",
+			"flow",
+			"fortran",
+			"gherkin",
+			"glsl",
+			"go",
+			"graphql",
+			"groovy",
+			"haskell",
+			"hcl",
+			"html",
+			"idris",
+			"java",
+			"javascript",
+			"json",
+			"julia",
+			"kotlin",
+			"latex",
+			"less",
+			"lisp",
+			"livescript",
+			"llvm ir",
+			"lua",
+			"makefile",
+			"markdown",
+			"markup",
+			"matlab",
+			"mathematica",
+			"mermaid",
+			"nix",
+			"notion formula",
+			"objective-c",
+			"ocaml",
+			"pascal",
+			"perl",
+			"php",
+			"plain text",
+			"powershell",
+			"prolog",
+			"protobuf",
+			"purescript",
+			"python",
+			"r",
+			"racket",
+			"reason",
+			"ruby",
+			"rust",
+			"sass",
+			"scala",
+			"scheme",
+			"scss",
+			"shell",
+			"smalltalk",
+			"solidity",
+			"sql",
+			"swift",
+			"toml",
+			"typescript",
+			"vb.net",
+			"verilog",
+			"vhdl",
+			"visual basic",
+			"webassembly",
+			"xml",
+			"yaml",
+			"java/c/c++/c#",
+		)
+
+		private val LANGUAGE_ALIASES = mapOf(
+			"js" to "javascript",
+			"node" to "javascript",
+			"ts" to "typescript",
+			"py" to "python",
+			"csharp" to "c#",
+			"c-sharp" to "c#",
+			"cpp" to "c++",
+			"plaintext" to "plain text",
+			"plain" to "plain text",
+			"text" to "plain text",
+			"sh" to "shell",
+			"zsh" to "shell",
+			"ps1" to "powershell",
+			"md" to "markdown",
+		)
 	}
 }

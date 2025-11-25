@@ -19,6 +19,7 @@
 	- 支持标题（1‑3 级）、段落、图片、表格、列表、引用、分隔线、内联加粗/斜体/代码/链接/删除线等，转换为原生 Notion 块。
 	- 表格中的图片会被提取并作为图片块附加，且保留标题说明。
 	- 若本机安装了 Node 的 `@tryfabric/martian`，优先使用其进行高保真转换；否则回退到内置转换器。
+	- 代码块语言会自动归一到 Notion 支持列表，未知语言降级为 `plain text`，避免 400 校验错误。
 
 - data 图片自动上传
 	- 默认使用 Notion 官方的 Direct Upload 流程（`/v1/file_uploads` + `/send`），data URI 会自动转成 `file_upload`

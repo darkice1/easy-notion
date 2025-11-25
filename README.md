@@ -26,6 +26,8 @@
   - Images inside tables are automatically extracted and appended with captions to satisfy Notion API constraints.
   - Supports an optional high‑fidelity converter via Node’s `@tryfabric/martian` when available; otherwise falls back to
     the built‑in Kotlin converter.
+  - Code blocks normalize languages to Notion’s allowed list and degrade to `plain text` when unknown, preventing 400
+    validation errors.
 
 - **Data image auto‑upload**  
   Markdown `data:image/...;base64,...` blobs are uploaded automatically via Notion's Direct Upload API and rendered as
