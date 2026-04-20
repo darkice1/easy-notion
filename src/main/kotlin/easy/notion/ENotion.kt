@@ -33,11 +33,28 @@ import java.net.URI
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeFormatterBuilder
+import java.time.temporal.ChronoField
 import java.util.concurrent.TimeUnit
 import easy.notion.media.DataImageUploadResult as MediaDataImageUploadResult
 
 private const val DEFAULT_VIDEO_WIDTH = 640
 private const val DEFAULT_VIDEO_HEIGHT = 360
+private val NORMALIZED_TIMESTAMP_FORMATTER: DateTimeFormatter =
+	DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+private val OFFSET_TIMESTAMP_FORMATTERS: List<DateTimeFormatter> = listOf(
+	DateTimeFormatter.ISO_OFFSET_DATE_TIME,
+	DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ssXXX"),
+	DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSXXX"),
+)
+private val LOCAL_TIMESTAMP_FORMATTERS: List<DateTimeFormatter> = listOf(
+	DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
+	DateTimeFormatterBuilder()
+		.appendPattern("yyyy-MM-dd HH:mm")
+		.parseDefaulting(ChronoField.SECOND_OF_MINUTE, 0)
+		.parseDefaulting(ChronoField.NANO_OF_SECOND, 0)
+		.toFormatter(),
+)
 
 /**
  * Lightweight wrapper for selected Notion REST API endpoints.
@@ -815,6 +832,13 @@ class ENotion(
 		}
 	}
 
+	/** 兼容旧签名：不传 `markdownContent` 时转调到新签名。 */
+	@Suppress("unused")
+	fun insertRecord(
+		databaseId: String,
+		vararg fields: Pair<String, Any?>,
+	): JSONObject? = insertRecord(databaseId, null, *fields)
+
 	/**
 	 * 向指定 Notion 数据库插入一条记录
 	 *
@@ -898,6 +922,14 @@ class ENotion(
 			JSONObject(bodyTxt)
 		}
 	}
+
+	/** 兼容旧签名：不传 `markdownContent` 时转调到新签名。 */
+	@Suppress("unused")
+	fun updateRecord(
+		databaseId: String,
+		pageId: String,
+		vararg fields: Pair<String, Any?>,
+	): JSONObject? = updateRecord(databaseId, pageId, null, *fields)
 
 	/**
 	 * 更新指定页面的列内容
@@ -1016,6 +1048,54 @@ class ENotion(
 		client.newCall(req).execute().use { resp -> return resp.isSuccessful }
 	}
 
+	private fun extractPlainTextValue(items: JSONArray?): String? {
+		if (items == null || items.isEmpty) return null
+
+		val content = buildString {
+			for (i in 0 until items.length()) {
+				val item = items.optJSONObject(i) ?: continue
+				append(
+					item.optString("plain_text").ifBlank {
+						item.optJSONObject("text")?.optString("content").orEmpty()
+					},
+				)
+			}
+		}.trim()
+
+		return content.ifBlank { null }
+	}
+
+	private fun extractTimestampRawValue(property: JSONObject): String? = when (property.optString("type")) {
+		"date" -> property.optJSONObject("date")?.optString("start")?.trim()?.ifBlank { null }
+		"rich_text" -> extractPlainTextValue(property.optJSONArray("rich_text"))
+		"title" -> extractPlainTextValue(property.optJSONArray("title"))
+		else -> null
+	}
+
+	private fun normalizeTimestamp(raw: String): String? {
+		val value = raw.trim()
+		if (value.isEmpty()) return null
+
+		for (formatter in OFFSET_TIMESTAMP_FORMATTERS) {
+			try {
+				return OffsetDateTime.parse(value, formatter)
+					.toLocalDateTime()
+					.format(NORMALIZED_TIMESTAMP_FORMATTER)
+			} catch (_: Exception) {
+			}
+		}
+
+		for (formatter in LOCAL_TIMESTAMP_FORMATTERS) {
+			try {
+				return LocalDateTime.parse(value, formatter)
+					.format(NORMALIZED_TIMESTAMP_FORMATTER)
+			} catch (_: Exception) {
+			}
+		}
+
+		return null
+	}
+
 	/** Latest value of [timeField] in MySQL `yyyy-MM-dd HH:mm:ss` format, or `null` when empty. */
 	@Suppress("unused")
 	fun getLatestTimestamp(databaseId: String, timeField: String): String? {
@@ -1047,30 +1127,10 @@ class ENotion(
 			val fieldObj = props.optJSONObject(timeField) ?: return null
 
 			/* ---------- 2. extract the raw string value ---------- */
-			val raw: String? = when (fieldObj.optString("type")) {
-				"date" -> fieldObj.optJSONObject("date")?.optString("start")
-				"rich_text" -> fieldObj.optJSONArray("rich_text")?.optJSONObject(0)
-					?.optJSONObject("text")?.optString("content")
-
-				"title" -> fieldObj.optJSONArray("title")?.optJSONObject(0)
-					?.optJSONObject("text")?.optString("content")
-
-				else -> null
-			}
-			if (raw.isNullOrBlank()) return null
+			val raw = extractTimestampRawValue(fieldObj) ?: return null
 
 			/* ---------- 3. normalise to "yyyy-MM-dd HH:mm:ss" ---------- */
-			val targetFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-			// Try ISO formats first
-			return try {
-				OffsetDateTime.parse(raw).format(targetFmt)
-			} catch (ignored: Exception) {
-				try {
-					LocalDateTime.parse(raw, targetFmt).format(targetFmt)
-				} catch (ignored2: Exception) {
-					null
-				}
-			}
+			return normalizeTimestamp(raw)
 		}
 	}
 

@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.github.darkice1"
-version = "0.0.18"
+version = "0.0.19"
 
 val projectName = "easy-notion"
 val projectDesc = "Neo easy Notion SDK."
@@ -35,6 +35,7 @@ dependencies {
 
 	api(kotlin("stdlib"))
 	testImplementation(kotlin("test"))
+	testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {

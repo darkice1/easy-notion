@@ -13,11 +13,13 @@
 
 - **Record Insertion** – `insertRecord`  
   Insert a row into a database while automatically converting Kotlin/SQL values to the correct Notion property
-  structure, with optional *markdownContent* rendered as rich Notion blocks.
+  structure, with optional *markdownContent* rendered as rich Notion blocks. The legacy overload
+  `insertRecord(databaseId, vararg fields)` remains available for backward compatibility.
 
 - **Record Update** – `updateRecord`  
   Patch one or more columns of an existing page with the same automatic type handling as *insertRecord*, and
-  optionally append converted Markdown content.
+  optionally append converted Markdown content. The legacy overload
+  `updateRecord(databaseId, pageId, vararg fields)` remains available for backward compatibility.
 
 - **Markdown Content Support** – `markdownContent`  
   The `insertRecord` and `updateRecord` methods now accept an optional **markdownContent** parameter.
@@ -52,7 +54,9 @@
   Compare the remote schema with local column definitions and add any missing properties on‑the‑fly.
 
 - **Timestamp Helper** – `getLatestTimestamp`  
-  Quickly obtain the newest ISO date stored in a designated *date* column (useful for incremental sync).
+  Quickly obtain the newest timestamp stored in a designated `date`, `rich_text`, or `title` column and normalize it
+  to `yyyy-MM-dd HH:mm:ss`. Supported inputs include `ISO_OFFSET_DATE_TIME`, `yyyy-MM-dd HH:mm:ssXXX`,
+  `yyyy-MM-dd HH:mm:ss.SSSXXX`, `yyyy-MM-dd HH:mm:ss`, and `yyyy-MM-dd HH:mm`.
 
 - **Miscellaneous Utilities**  
   Helpers for reading a database’s `properties` object, mapping SQL types to Notion types, and extracting primitive
@@ -117,6 +121,13 @@ notion.insertRecord(
   "Created" to "2025-05-25 10:00:00",
 )
 
+// legacy overload remains valid
+notion.insertRecord(
+  newDbId,
+  "ID" to "43",
+  "Level" to "INFO",
+)
+
 // update (patch fields + append more Markdown)
 notion.updateRecord(
   databaseId = newDbId,
@@ -124,6 +135,13 @@ notion.updateRecord(
   markdownContent = "- **现价**：￥208",
   "Level" to "ERROR",
   "Message" to "Oops, something went wrong",
+)
+
+// legacy overload remains valid
+notion.updateRecord(
+  newDbId,
+  "pppppppppppppppppppppppppppppppp",
+  "Level" to "WARN",
 )
 
 // Optional: data image auto‑upload (custom uploader example)

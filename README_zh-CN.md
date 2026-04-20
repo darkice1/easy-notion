@@ -11,9 +11,11 @@
 
 - 插入记录 – `insertRecord`  
   自动根据数据库 schema 将 Kotlin/SQL 值转换为正确的 Notion 属性结构，可选传入 `markdownContent` 自动转为 Notion 块。
+  旧签名 `insertRecord(databaseId, vararg fields)` 仍保留，兼容已有调用。
 
 - 更新记录 – `updateRecord`  
   与插入相同的自动类型处理，支持附加 `markdownContent`。
+  旧签名 `updateRecord(databaseId, pageId, vararg fields)` 仍保留，兼容已有调用。
 
 - Markdown 内容支持 – `markdownContent`
 	- 支持标题（1‑3 级）、段落、图片、表格、列表、引用、分隔线、内联加粗/斜体/代码/链接/删除线等，转换为原生 Notion 块。
@@ -45,7 +47,9 @@
   对比远端 schema 与本地列定义，自动补充缺失列。
 
 - 时间戳工具 – `getLatestTimestamp`  
-  快速获取某日期列的最新时间（标准 `yyyy-MM-dd HH:mm:ss`）。
+  快速获取某个 `date`、`rich_text` 或 `title` 列中的最新时间，并统一输出为
+  `yyyy-MM-dd HH:mm:ss`。支持 `ISO_OFFSET_DATE_TIME`、`yyyy-MM-dd HH:mm:ssXXX`、
+  `yyyy-MM-dd HH:mm:ss.SSSXXX`、`yyyy-MM-dd HH:mm:ss`、`yyyy-MM-dd HH:mm`。
 
 ## 快速开始
 
@@ -77,12 +81,26 @@ notion.insertRecord(
   "Level" to "INFO",
 )
 
+// 旧签名依然可用
+notion.insertRecord(
+  "your_database_id",
+  "ID" to "43",
+  "Level" to "INFO",
+)
+
 // 更新（局部字段 + 追加 Markdown）
 notion.updateRecord(
   databaseId = "your_database_id",
   pageId = "your_page_id",
   markdownContent = "- **现价**：￥208",
   "Level" to "ERROR",
+)
+
+// 旧签名依然可用
+notion.updateRecord(
+  "your_database_id",
+  "your_page_id",
+  "Level" to "WARN",
 )
 
 // 可选：data 图片自动上传（示例：自定义上传回调）
