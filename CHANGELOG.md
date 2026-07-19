@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-19
+
+- chore(build): upgrade the project toolchain to JDK 25, Kotlin 2.4.10, Gradle 9.5.0, and Nexus Publish Plugin 2.0.0.
+- docs: document the JDK 25 build requirement and JVM 25 bytecode target in both READMEs.
+
 ## 2026-04-20
 
 - feat: restore backward-compatible `insertRecord` and `updateRecord` overloads while keeping the Markdown-aware

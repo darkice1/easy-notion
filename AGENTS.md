@@ -13,7 +13,7 @@
 - 源码：`src/main/kotlin/easy/notion/`（库代码），核心文件：`ENotion.kt`、`BlockTransformer.kt`。
 - 测试/示例：`src/test/kotlin/`（如 `TestNotionTools.kt`），更偏向手动验证，建议逐步迁移为单元测试。
 - 构建文件：Gradle 为主（`build.gradle.kts`）。
-- 运行环境：JDK 21，Kotlin 2.1.x。
+- 运行环境：JDK 25，Kotlin 2.4.10。
 
 ## 构建、测试与本地开发命令
 
@@ -53,4 +53,4 @@
 
 - 机密信息禁止入库：`config.properties` 已被 `.gitignore` 忽略，仅在本地保存。
 - 发布任务需要签名与凭据（Gradle 属性或环境变量）：`signingKey`、`signingPassword`、`centralUsername`、`centralPassword`。
-- 使用 JDK 21（`JAVA_HOME` 指向 21）以匹配工具链。
+- 使用 JDK 25（`JAVA_HOME` 指向 25）以匹配工具链。

@@ -1,15 +1,15 @@
 @file:Suppress("VulnerableLibrariesLocal")
 
 plugins {
-	kotlin("jvm") version "2.1.20"
+	kotlin("jvm") version "2.4.10"
 	`java-library`
-	id("io.github.gradle-nexus.publish-plugin") version "1.3.0"
+	id("io.github.gradle-nexus.publish-plugin") version "2.0.0"
 	`maven-publish`
 	signing
 }
 
 group = "com.github.darkice1"
-version = "0.0.19"
+version = "0.0.20"
 
 val projectName = "easy-notion"
 val projectDesc = "Neo easy Notion SDK."
@@ -17,7 +17,7 @@ val repoName = projectName
 
 java {
 	toolchain {
-		languageVersion.set(JavaLanguageVersion.of(21))
+		languageVersion.set(JavaLanguageVersion.of(25))
 	}
 	withSourcesJar()
 	withJavadocJar()
@@ -40,7 +40,7 @@ dependencies {
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
 	compilerOptions {
-		jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+		jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25)
 	}
 }
 

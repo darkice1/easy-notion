@@ -132,13 +132,15 @@ npm i -g @tryfabric/martian
 
 ## 依赖
 
-- 语言：Kotlin
+- 语言：Kotlin 2.4.10
 - HTTP：OkHttp 4.x
 - JSON：org.json
-- 构建工具：Gradle（可选 Maven）
-- 运行环境：JDK 21，Kotlin 2.1.x
+- 构建工具：Gradle 9.5.0（通过 Gradle Wrapper；使用方也可通过 Maven 引入）
+- 运行环境：JDK 25；发布产物面向 JVM 25
 
 ## 开发与测试
+
+运行 Gradle Wrapper 前，请确保 `JAVA_HOME` 指向 JDK 25。
 
 - 构建：`./gradlew build`
 - 仅测试：`./gradlew test`

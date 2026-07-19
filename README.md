@@ -230,12 +230,15 @@ npm i -g @tryfabric/martian
 
 ## Dependencies
 
-- **Language**: Kotlin
+- **Language**: Kotlin 2.4.10
 - **HTTP**: OkHttp 4.x
 - **JSON**: org.json
-- **Build Tool**: Gradle (Maven optional)
+- **Build Tool**: Gradle 9.5.0 (via the Gradle Wrapper; Maven optional for consumers)
+- **Runtime / toolchain**: JDK 25; published bytecode targets JVM 25
 
 ## Development and Testing
+
+Set `JAVA_HOME` to a JDK 25 installation before running the Gradle Wrapper.
 
 - Build: `./gradlew build`
 - Run tests only: `./gradlew test`
