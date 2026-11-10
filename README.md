@@ -80,6 +80,12 @@ fun main() {
 }
 ```
 
+### Read pages individually
+
+Use `queryPages` to list raw metadata with a continuation cursor. Pass a selected page to `renderPage` to read and render its paginated blocks without writing to Notion. A failed or unsupported block rejects the document so a caller can continue with the next page. `getDataBase` remains available for callers that want a rendered batch.
+
+Use `readPage` for a fresh page snapshot and `NotionDocument.fingerprint` to identify the rendered content and chosen input fields. Temporary hosted file signatures are excluded from the fingerprint. `patchPageProperties` sends typed values, including JSON null dates. HTTP errors from the new APIs report the status and optional Retry-After.
+
 ### Searching for a database
 
 ```kotlin

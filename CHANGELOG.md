@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-09
+
+- 0.0.21 新增元数据分页、单页只读渲染和类型化回写接口，区分 HTTP 错误及 Retry-After。支持正文和嵌套块分页、内容摘要及日期清空。保留原有批量入口。
+
 ## 2026-07-19
 
 - chore(build): upgrade the project toolchain to JDK 25, Kotlin 2.4.10, Gradle 9.5.0, and Nexus Publish Plugin 2.0.0.

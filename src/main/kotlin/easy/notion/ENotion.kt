@@ -22,6 +22,7 @@ import easy.notion.render.renderGenericBlockHtml
 import easy.notion.render.renderHeadingHtml
 import easy.notion.render.renderListItemHtml
 import easy.notion.render.renderRichText
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -113,33 +114,82 @@ class ENotion(
 	private fun requestBuilder(url: String): Request.Builder =
 		notionRequestBuilder(apikey, url)
 
-	/**
-	 * 通用块子项获取
-	 * @param blockId Notion 块 ID
-	 * @return 子块 JSONArray
-	 */
-	private fun fetchBlockChildren(blockId: String): JSONArray {
-		val childrenUrl = "https://api.notion.com/v1/blocks/$blockId/children?page_size=100"
-		val request = requestBuilder(childrenUrl)
-			.get()
-			.build()
-		this.client.newCall(request).execute().use { response ->
-			if (!response.isSuccessful) throw IOException("Unexpected code $response")
-			val json = JSONObject(response.body?.string())
-			return json.getJSONArray("results")
+	/** Read one cursor page of Notion metadata. Does not fetch or render any page blocks. */
+	fun queryPages(
+		databaseId: String,
+		pageSize: Int = 100,
+		filter: JSONObject? = null,
+		sorts: JSONArray? = null,
+		cursor: String? = null,
+	): NotionPageBatch {
+		require(pageSize in 1..100)
+		val payload = JSONObject().put("page_size", pageSize).put("filter", filter)
+			.put("sorts", sorts).put("start_cursor", cursor)
+		val request = requestBuilder("https://api.notion.com/v1/databases/$databaseId/query")
+			.post(payload.toString().toRequestBody("application/json".toMediaTypeOrNull())).build()
+		return parsePageBatch(readJson(request), cursor)
+	}
+
+	/** Read the current Notion page properties without touching its content or updating it. */
+	@Suppress("unused")
+	fun readPage(pageId: String): JSONObject =
+		readJson(requestBuilder("https://api.notion.com/v1/pages/$pageId").get().build())
+
+	/** Write only the supplied, already typed properties. Values such as date:null are sent as-is. */
+	fun patchPageProperties(pageId: String, properties: JSONObject): JSONObject {
+		require(!properties.isEmpty)
+		val payload = JSONObject().put("properties", properties)
+		val request = requestBuilder("https://api.notion.com/v1/pages/$pageId")
+			.patch(payload.toString().toRequestBody("application/json".toMediaTypeOrNull())).build()
+		return readJson(request)
+	}
+
+	/** Read the database schema, preserving HTTP errors for callers that distinguish failures. */
+	@Suppress("unused")
+	fun readDatabaseProperties(databaseId: String): JSONObject =
+		readJson(requestBuilder("https://api.notion.com/v1/databases/$databaseId").get().build()).getJSONObject("properties")
+
+	/** Render one page with all block pages, without any remote writes. */
+	fun renderPage(page: JSONObject): NotionDocument {
+		check(!page.optBoolean("archived") && !page.optBoolean("in_trash")) { "Notion page is archived" }
+		return renderPage(page, null, persistTransforms = false)
+	}
+
+	private fun readJson(request: Request): JSONObject = client.newCall(request).execute().use { response ->
+		if (!response.isSuccessful) {
+			val retryAfter = response.header("Retry-After")?.toLongOrNull()?.takeIf { it >= 0 }
+			throw NotionRequestException(response.code, retryAfter)
+		}
+		JSONObject(requireNotNull(response.body).string())
+	}
+
+	private fun parsePageBatch(json: JSONObject, cursor: String?): NotionPageBatch {
+		val next = if (json.optBoolean("has_more"))
+			json.optString("next_cursor").takeIf { it.isNotBlank() && it != cursor }
+				?: throw IOException("Notion pagination did not advance")
+		else null
+		val results = json.getJSONArray("results")
+		return NotionPageBatch((0 until results.length()).map(results::getJSONObject), next)
+	}
+
+	private fun fetchBlockChildren(blockId: String): List<JSONObject> {
+		val seen = mutableSetOf<String>()
+		return buildList {
+			var cursor: String? = null
+			do {
+				val url = "https://api.notion.com/v1/blocks/$blockId/children".toHttpUrl().newBuilder()
+					.addQueryParameter("page_size", "100").apply {
+						cursor?.let { addQueryParameter("start_cursor", it) }
+					}.build()
+				val batch = parsePageBatch(readJson(requestBuilder(url.toString()).get().build()), cursor)
+				addAll(batch.pages)
+				cursor = batch.nextCursor
+				if (cursor != null && !seen.add(cursor)) throw IOException("Notion block pagination repeated a cursor")
+			} while (cursor != null)
 		}
 	}
 
-	/**
-	 * 查询 Notion 数据库内容并返回 JSON 数组。
-	 *
-	 * @param databaseId    数据库 ID
-	 * @param pageSize      每页最大条数（默认 100）
-	 * @param filter        可选筛选条件（Notion filter 对象）
-	 * @param sorts         可选排序条件（Notion sorts 数组）
-	 * @param transformers  optional array of BlockTransformer to pre‑process each block; default null
-	 * @return 解析后的 JSONArray，每项为一行，含所有字段和渲染后的 content HTML
-	 */
+	/** Compatibility API: query one database batch and render all pages in that batch. */
 	@Suppress("unused")
 	fun getDataBase(
 		databaseId: String,
@@ -147,414 +197,297 @@ class ENotion(
 		filter: JSONObject? = null,
 		sorts: JSONArray? = null,
 		transformers: Array<BlockTransformer>? = null,
-	): JSONArray {
-		val url = "https://api.notion.com/v1/databases/$databaseId/query"
-		val mediaType = "application/json".toMediaTypeOrNull()
-		// Assemble request payload with optional paging, filter and sorting
-		val payload = JSONObject().apply {
-			put("page_size", pageSize)
-			if (filter != null) put("filter", filter)
-			if (sorts != null) put("sorts", sorts)
-		}
-		val body = payload.toString().toRequestBody(mediaType)
+	): JSONArray = JSONArray(queryPages(databaseId, pageSize, filter, sorts).pages.map {
+		renderPage(it, transformers, persistTransforms = true).values
+	})
 
-		val request = requestBuilder(url)
-			.post(body)
+	private fun renderPage(page: JSONObject, transformers: Array<BlockTransformer>?, persistTransforms: Boolean): NotionDocument {
+		val properties = page.getJSONObject("properties")
+		val item = JSONObject()
+
+		item.put("id", page.getString("id"))
+		item.put("created_time", page.getString("created_time"))
+		item.put("last_edited_time", page.getString("last_edited_time"))
+
+		for (keyAny in properties.keys()) {
+			val prop = properties.getJSONObject(keyAny)
+			when (prop.getString("type")) {
+				"title", "rich_text" -> item.put(keyAny, propertyText(prop.getJSONArray(prop.getString("type"))))
+				"number" -> {
+					item.put(keyAny, prop.get("number"))
+				}
+
+				"checkbox" -> {
+					item.put(keyAny, prop.get("checkbox"))
+				}
+
+				"select" -> {
+					val sel = prop.optJSONObject("select")
+					item.put(keyAny, sel?.getString("name") ?: "")
+				}
+
+				"multi_select" -> {
+					val arr = prop.getJSONArray("multi_select")
+					val names = arr.map { (it as JSONObject).getString("name") }
+					item.put(keyAny, names)
+				}
+
+				"date" -> {
+					val dateObj = prop.optJSONObject("date")
+					item.put(keyAny, dateObj?.getString("start") ?: "")
+				}
+
+				"url" -> {
+					item.put(keyAny, prop.optString("url", ""))
+				}
+
+				"email" -> {
+					item.put(keyAny, prop.optString("email", ""))
+				}
+
+				"phone_number" -> {
+					item.put(keyAny, prop.optString("phone_number", ""))
+				}
+
+				"created_time" -> {
+					item.put(keyAny, prop.getString("created_time"))
+				}
+
+				"last_edited_time" -> {
+					item.put(keyAny, prop.getString("last_edited_time"))
+				}
+				"button" -> {
+					continue
+				}
+
+				else -> item.put(keyAny, prop.toString())
+			}
+		}
+		val hostedFiles = mutableSetOf<String>()
+		val html = renderBlocks(fetchBlockChildren(page.getString("id")), 0, hostedFiles, transformers, persistTransforms)
+		// 如果有内容，插入样式
+		if (html.isNotEmpty()) {
+			val styleTag = "<style>" +
+					"hr{border:none;border-top:1px solid #E1E3E5;margin:16px 0;}" +
+					"table{border-collapse:collapse;border:1px solid #E1E3E5;}" +
+					"th,td{border:1px solid #E1E3E5;padding:8px;text-align:left;}" +
+					"thead th{background-color:#f2f2f2;}" +
+					"tbody th{background-color:#f2f2f2;}" +
+					"img{max-width:600px;}" +
+					"a{text-decoration:underline;}" +
+					"pre{background:#f5f5f5;padding:10px;border-radius:3px;overflow:auto;}" +
+					"pre code{background:transparent;padding:0;}" +
+					"code{background:#f5f5f5;padding:2px 4px;border-radius:3px;font-family:monospace;}" +
+					"blockquote{border-left:4px solid #E1E3E5;margin:16px 0;padding-left:12px;}" +
+					".callout{border-left:4px solid #E0E2E4;background:#FAFAFA;padding:12px;margin:16px 0;}" +
+					"</style>"
+			item.put("styleTag", styleTag)
+		}
+		item.put("content", html)
+		return NotionDocument(item, hostedFiles)
+	}
+
+	private fun propertyText(parts: JSONArray): String = parts.joinToString("") {
+		val part = it as JSONObject
+		part.optString("plain_text", part.optJSONObject("text")?.optString("content").orEmpty())
+	}
+
+	private fun renderBlocks(
+		blocks: List<JSONObject>,
+		depth: Int,
+		hostedFiles: MutableSet<String>,
+		transformers: Array<BlockTransformer>?,
+		persistTransforms: Boolean,
+	): String {
+		fun renderChildren(id: String, level: Int): String {
+			check(level <= 32) { "Notion block nesting exceeds 32 levels" }
+			return renderBlocks(fetchBlockChildren(id), level, hostedFiles, transformers, persistTransforms)
+		}
+		val htmlBuilder = StringBuilder()
+		var currentListType: String? = null
+
+		for (block in blocks) {
+			val originalType = block.getString("type")
+			block.optJSONObject(originalType)?.optJSONObject("file")?.optString("url")
+				?.takeIf { it.isNotBlank() }?.let(hostedFiles::add)
+			/* ---------- transformer hook ---------- */
+			var modified = false
+			if (transformers != null) {
+				for (t in transformers) {
+					if (t.handle(block)) modified = true
+				}
+			}
+			if (modified && persistTransforms) {
+				// Persist the change to Notion so the remote document stays in sync.
+				// Then continue rendering *this same, now‑modified* block so that
+				// htmlBuilder reflects the latest content.
+				performBlockReplace(block)
+			}
+			val type = block.getString("type")
+			fun children(): String = if (block.optBoolean("has_children"))
+				renderChildren(block.getString("id"), depth + 1) else ""
+			// 统一列表关闭逻辑
+			val isListItem = type == "bulleted_list_item" || type == "numbered_list_item"
+			if (!isListItem && currentListType != null) {
+				htmlBuilder.append(if (currentListType == "bulleted_list_item") "</ul>" else "</ol>")
+				currentListType = null
+			}
+			when (type) {
+				"code" -> {
+					val texts = block.getJSONObject("code").getJSONArray("rich_text")
+					val content = renderRichText(texts)
+					htmlBuilder.append("<pre><code>").append(content).append("</code></pre>")
+				}
+				"paragraph" -> {
+					val content = renderRichText(block.getJSONObject("paragraph").getJSONArray("rich_text"))
+					htmlBuilder.append("<p>").append(content).append("</p>").append(children())
+				}
+
+				"heading_1", "heading_2", "heading_3" -> {
+					val level = type.removePrefix("heading_")
+					val contentArr = block.getJSONObject(type).getJSONArray("rich_text")
+					htmlBuilder.append(renderHeadingHtml(level, contentArr)).append(children())
+				}
+
+				"bulleted_list_item", "numbered_list_item" -> {
+					if (currentListType != type) {
+						if (currentListType == "bulleted_list_item") htmlBuilder.append("</ul>")
+						if (currentListType == "numbered_list_item") htmlBuilder.append("</ol>")
+						htmlBuilder.append(if (type == "bulleted_list_item") "<ul>" else "<ol>")
+						currentListType = type
+					}
+					val key = if (type == "bulleted_list_item") "bulleted_list_item" else "numbered_list_item"
+					val contentArr = block.getJSONObject(key).getJSONArray("rich_text")
+					val itemHtml = renderListItemHtml(contentArr)
+					htmlBuilder.append(itemHtml.removeSuffix("</li>")).append(children()).append("</li>")
+				}
+				"quote" -> htmlBuilder.append("<blockquote>")
+					.append(renderRichText(block.getJSONObject("quote").getJSONArray("rich_text")))
+					.append(children()).append("</blockquote>")
+				"callout" -> {
+					val content = renderRichText(block.getJSONObject("callout").getJSONArray("rich_text"))
+					htmlBuilder.append("<div class=\"callout\">").append(content).append(children()).append("</div>")
+				}
+				"divider" -> htmlBuilder.append("<hr/>")
+				"video" -> {
+					val videoHtml = renderVideoBlock(block)
+					if (videoHtml.isNotEmpty()) htmlBuilder.append(videoHtml)
+				}
+				"image" -> {
+					val imageObj = block.getJSONObject("image")
+					val (purl, caption) = extractImageUrlAndCaption(imageObj)
+					// 按 Notion 格式控制宽度
+					val fmt = block.optJSONObject("format")
+					val bw = fmt?.optDouble("block_width", -1.0) ?: -1.0
+					val bh = fmt?.optDouble("block_height", -1.0) ?: -1.0
+					val styleSb = StringBuilder()
+					if (bw > 0) styleSb.append("width:").append(bw.toInt()).append("px;")
+					if (bh > 0) styleSb.append("height:").append(bh.toInt()).append("px;")
+					htmlBuilder.append("<img src=\"").append(purl)
+						.append("\" alt=\"").append(caption.replace("\"", "&quot;"))
+						.append("\" decoding=\"async\"")
+					if (styleSb.isNotEmpty()) htmlBuilder.append(" style=\"").append(styleSb).append("\"")
+					htmlBuilder.append("/>")
+				}
+				"table" -> {
+					val rows = fetchBlockChildren(block.getString("id"))
+					val tblFmt = block.optJSONObject("format")
+					val bw = tblFmt?.optDouble("block_width", -1.0) ?: -1.0
+					val tableStyle = if (bw > 0) " style=\"width:${bw.toInt()}px;\"" else ""
+					htmlBuilder.append("<table").append(tableStyle).append(">")
+					val tblObj = block.getJSONObject("table")
+					val hasCol = tblObj.optBoolean("has_column_header", false)
+					if (hasCol && rows.isNotEmpty()) {
+						htmlBuilder.append("<thead><tr>")
+						val hdr = rows[0].getJSONObject("table_row").getJSONArray("cells")
+						for (c in 0 until hdr.length()) {
+							val txt = renderRichText(hdr.getJSONArray(c))
+							htmlBuilder.append("<th>").append(txt).append("</th>")
+						}
+						htmlBuilder.append("</tr></thead>")
+					}
+					htmlBuilder.append("<tbody>")
+					for (r in (if (hasCol) 1 else 0) until rows.size) {
+						htmlBuilder.append("<tr>")
+						val cells = rows[r].getJSONObject("table_row").getJSONArray("cells")
+						for (c in 0 until cells.length()) {
+							val txt = renderRichText(cells.getJSONArray(c))
+							if (c == 0 && tblObj.optBoolean("has_row_header", false)) {
+								htmlBuilder.append("<th scope=\"row\">").append(txt).append("</th>")
+							} else {
+								htmlBuilder.append("<td>").append(txt).append("</td>")
+							}
+						}
+						htmlBuilder.append("</tr>")
+					}
+					htmlBuilder.append("</tbody></table>")
+				}
+				"child_page", "child_database" -> {
+					require(persistTransforms) { "Nested pages and databases are separate documents" }
+				}
+				else -> {
+					val text = renderGenericBlockHtml(block)
+					val nested = children()
+					require(persistTransforms || text.isNotBlank() || nested.isNotBlank() ||
+						type in setOf("breadcrumb", "table_of_contents")) { "Unsupported Notion content block: $type" }
+					htmlBuilder.append(text).append(nested)
+				}
+			}
+		}
+		// 结束后关闭列表
+		if (currentListType == "bulleted_list_item") htmlBuilder.append("</ul>")
+		if (currentListType == "numbered_list_item") htmlBuilder.append("</ol>")
+		return htmlBuilder.toString()
+	}
+
+	/** Replace a single block [blk] (any type) by appending a fresh copy that contains
+	 *  the current data from [blk], moving it right after the original, then archiving
+	 *  the original block.  This preserves order and avoids the PATCH‑400 limitation
+	 *  on media blocks.  Returns `true` on success. */
+	private fun performBlockReplace(blk: JSONObject): Boolean {
+		/* ---------- extract parent info ---------- */
+		val parentObj = blk.getJSONObject("parent")
+		val parentType = parentObj.optString("type", "page_id")        // page_id | block_id
+		val parentId = parentObj.optString(parentType, "")
+
+		/* ---------- 1. build copy of the original block ---------- */
+		val blkType = blk.getString("type")
+		val newBlockJson = JSONObject().apply {
+			put("object", "block")
+			put("type", blkType)
+			put(blkType, blk.getJSONObject(blkType))   // deep‑copy
+		}
+
+		/* ---------- 2. append copy immediately AFTER the old block ---------- */
+		val appendBody = JSONObject()
+			// insert the new block right after the current block instead of at the end
+			.put("after", blk.getString("id"))
+			.put("children", JSONArray().put(newBlockJson))
+			.toString()
+			.toRequestBody("application/json".toMediaTypeOrNull())
+
+		val appendReq = requestBuilder("https://api.notion.com/v1/blocks/$parentId/children")
+			.patch(appendBody)
 			.build()
 
-		client.newCall(request).execute().use { response ->
-			if (!response.isSuccessful) throw IOException("Unexpected code $response")
-			val responseJson = JSONObject(response.body?.string())
-			val results = responseJson.getJSONArray("results")
-//			println(results)
-			val output = JSONArray()
-			// Collect blocks that were modified by transformers, to patch them back in batch
-			/** Replace a single block [blk] (any type) by appending a fresh copy that contains
-			 *  the current data from [blk], moving it right after the original, then archiving
-			 *  the original block.  This preserves order and avoids the PATCH‑400 limitation
-			 *  on media blocks.  Returns `true` on success. */
-			fun performBlockReplace(blk: JSONObject): Boolean {
-				/* ---------- extract parent info ---------- */
-				val parentObj = blk.getJSONObject("parent")
-				val parentType = parentObj.optString("type", "page_id")        // page_id | block_id
-				val parentId = parentObj.optString(parentType, "")
-
-				/* ---------- 1. build copy of the original block ---------- */
-				val blkType = blk.getString("type")
-				val newBlockJson = JSONObject().apply {
-					put("object", "block")
-					put("type", blkType)
-					put(blkType, blk.getJSONObject(blkType))   // deep‑copy
-				}
-
-				/* ---------- 2. append copy immediately AFTER the old block ---------- */
-				val appendBody = JSONObject()
-					// insert the new block right after the current block instead of at the end
-					.put("after", blk.getString("id"))
-					.put("children", JSONArray().put(newBlockJson))
-					.toString()
-					.toRequestBody("application/json".toMediaTypeOrNull())
-
-				val appendReq = requestBuilder("https://api.notion.com/v1/blocks/$parentId/children")
-					.patch(appendBody)
-					.build()
-
-				client.newCall(appendReq).execute().use { resp ->
-					if (!resp.isSuccessful) return false
-				}
-
-				/* ---------- 4. archive (delete) the original block ---------- */
-				val archiveBody = JSONObject().put("archived", true)
-					.toString()
-					.toRequestBody("application/json".toMediaTypeOrNull())
-
-				val archiveReq = requestBuilder("https://api.notion.com/v1/blocks/${blk.getString("id")}")
-					.patch(archiveBody)
-					.build()
-
-				client.newCall(archiveReq).execute().use { resp ->
-					if (!resp.isSuccessful) return false
-				}
-
-				return true
-			}
-
-			for (i in 0 until results.length()) {
-				val page = results.getJSONObject(i)
-				val properties = page.getJSONObject("properties")
-				val item = JSONObject()
-
-				// 添加页面层面的唯一 ID、创建和更新时间
-				item.put("id", page.getString("id"))
-				item.put("created_time", page.getString("created_time"))
-				item.put("last_edited_time", page.getString("last_edited_time"))
-
-				for (keyAny in properties.keys()) {
-					val key = keyAny as String
-					val prop = properties.getJSONObject(key)
-					when (prop.getString("type")) {
-						"title" -> {
-							val titleArray = prop.getJSONArray("title")
-							if (!titleArray.isEmpty) {
-								val titleText = titleArray.getJSONObject(0)
-									.getJSONObject("text")
-									.getString("content")
-//								item[key] = titleText
-								item.put(key, titleText)
-							} else {
-//								item[key] = ""
-								item.put(key, "")
-							}
-						}
-
-						"rich_text" -> {
-							val texts = prop.getJSONArray("rich_text")
-								.map { it as JSONObject }
-								.joinToString("") { it.getJSONObject("text").getString("content") }
-//							item[key] = texts
-							item.put(key, texts)
-						}
-
-						"number" -> {
-//							item[key] = prop.get("number")
-							item.put(key, prop.get("number"))
-						}
-
-						"checkbox" -> {
-//							item[key] = prop.getBoolean("checkbox")
-							item.put(key, prop.get("checkbox"))
-						}
-
-						"select" -> {
-							val sel = prop.optJSONObject("select")
-//							item[key] = sel?.getString("name") ?: ""
-							item.put(key, sel?.getString("name") ?: "")
-						}
-
-						"multi_select" -> {
-							val arr = prop.getJSONArray("multi_select")
-							val names = arr.map { (it as JSONObject).getString("name") }
-//							item[key] = names
-							item.put(key, names)
-						}
-
-						"date" -> {
-							val dateObj = prop.optJSONObject("date")
-//							item[key] = dateObj?.getString("start") ?: ""
-							item.put(key, dateObj?.getString("start") ?: "")
-						}
-
-						"url" -> {
-//							item[key] = prop.optString("url", "")
-							item.put(key, prop.optString("url", ""))
-						}
-
-						"email" -> {
-//							item[key] = prop.optString("email", "")
-							item.put(key, prop.optString("email", ""))
-						}
-
-						"phone_number" -> {
-//							item[key] = prop.optString("phone_number", "")
-							item.put(key, prop.optString("phone_number", ""))
-						}
-
-						"created_time" -> {
-							// 数据库属性类型为 created_time，直接取属性中的时间戳
-//							item[key] = prop.getString("created_time")
-							item.put(key, prop.getString("created_time"))
-						}
-
-						"last_edited_time" -> {
-							// 数据库属性类型为 last_edited_time，直接取属性中的时间戳
-//							item[key] = prop.getString("last_edited_time")
-							item.put(key, prop.getString("last_edited_time"))
-						}
-						"button" -> {
-							continue
-						}
-
-						else -> {
-							// 其他类型统一转为字符串
-//							item[key] = prop.toString()
-							try {
-								item.put(key, prop.toString())
-							} catch (e: Exception) {
-								throw e
-							}
-						}
-					}
-				}
-
-				// 获取页面块内容并手动渲染 HTML
-				val blocks = fetchBlockChildren(page.getString("id"))
-				val htmlBuilder = StringBuilder()
-				var currentListType: String? = null
-
-				for (j in 0 until blocks.length()) {
-					val block = blocks.getJSONObject(j)
-					/* ---------- transformer hook ---------- */
-					var modified = false
-					if (transformers != null) {
-						for (t in transformers) {
-							if (t.handle(block)) modified = true
-						}
-					}
-					if (modified) {
-						// Persist the change to Notion so the remote document stays in sync.
-						// Then continue rendering *this same, now‑modified* block so that
-						// htmlBuilder reflects the latest content.
-						performBlockReplace(block)
-					}
-					val type = block.getString("type")
-					// 统一列表关闭逻辑
-					val isListItem = type == "bulleted_list_item" || type == "numbered_list_item"
-					if (!isListItem && currentListType != null) {
-						htmlBuilder.append(if (currentListType == "bulleted_list_item") "</ul>" else "</ol>")
-						currentListType = null
-					}
-					when (type) {
-						"code" -> {
-							val texts = block.getJSONObject("code").getJSONArray("rich_text")
-							val content = renderRichText(texts)
-							htmlBuilder.append("<pre><code>").append(content).append("</code></pre>")
-						}
-						"paragraph" -> {
-							val content = renderRichText(block.getJSONObject("paragraph").getJSONArray("rich_text"))
-							htmlBuilder.append("<p>").append(content).append("</p>")
-						}
-
-						"heading_1", "heading_2", "heading_3" -> {
-							val level = type.removePrefix("heading_")
-							val contentArr = block.getJSONObject(type).getJSONArray("rich_text")
-							htmlBuilder.append(renderHeadingHtml(level, contentArr))
-						}
-
-						"bulleted_list_item", "numbered_list_item" -> {
-							if (currentListType != type) {
-								if (currentListType == "bulleted_list_item") htmlBuilder.append("</ul>")
-								if (currentListType == "numbered_list_item") htmlBuilder.append("</ol>")
-								htmlBuilder.append(if (type == "bulleted_list_item") "<ul>" else "<ol>")
-								currentListType = type
-							}
-							val key = if (type == "bulleted_list_item") "bulleted_list_item" else "numbered_list_item"
-							val contentArr = block.getJSONObject(key).getJSONArray("rich_text")
-							htmlBuilder.append(renderListItemHtml(contentArr))
-						}
-						"quote" -> {
-							val quoteObj = block.getJSONObject("quote")
-							val content = renderRichText(quoteObj.getJSONArray("rich_text"))
-							htmlBuilder.append("<blockquote>").append(content)
-
-							val qid = block.optString("id", null)
-							if (qid != null) {
-								val qChildren = fetchBlockChildren(qid)
-								var inList: String? = null // "bulleted_list_item" or "numbered_list_item"
-								for (k in 0 until qChildren.length()) {
-									val qc = qChildren.getJSONObject(k)
-									val qct = qc.getString("type")
-									fun closeList() {
-										if (inList == "bulleted_list_item") htmlBuilder.append("</ul>")
-										if (inList == "numbered_list_item") htmlBuilder.append("</ol>")
-										inList = null
-									}
-									when (qct) {
-										"image" -> {
-											closeList()
-											val (purl, caption) = extractImageUrlAndCaption(qc.getJSONObject("image"))
-											htmlBuilder.append("<img src=\"").append(purl)
-												.append("\" alt=\"").append(caption.replace("\"", "&quot;"))
-												.append("\" decoding=\"async\"/>")
-										}
-
-										"paragraph" -> {
-											closeList()
-											val pContent =
-												renderRichText(qc.getJSONObject("paragraph").getJSONArray("rich_text"))
-											if (pContent.isNotBlank()) htmlBuilder.append("<p>").append(pContent)
-												.append("</p>")
-										}
-
-										"code" -> {
-											closeList()
-											val cContent =
-												renderRichText(qc.getJSONObject("code").getJSONArray("rich_text"))
-											htmlBuilder.append("<pre><code>").append(cContent).append("</code></pre>")
-										}
-
-										"heading_1", "heading_2", "heading_3" -> {
-											closeList()
-											val lvl = qct.removePrefix("heading_")
-											val contentArr = qc.getJSONObject(qct).getJSONArray("rich_text")
-											htmlBuilder.append(renderHeadingHtml(lvl, contentArr))
-										}
-
-										"bulleted_list_item", "numbered_list_item" -> {
-											if (inList == null) {
-												htmlBuilder.append(if (qct == "bulleted_list_item") "<ul>" else "<ol>")
-												inList = qct
-											} else if (inList != qct) {
-												closeList()
-												htmlBuilder.append(if (qct == "bulleted_list_item") "<ul>" else "<ol>")
-												inList = qct
-											}
-											val key =
-												if (qct == "bulleted_list_item") "bulleted_list_item" else "numbered_list_item"
-											val contentArr = qc.getJSONObject(key).getJSONArray("rich_text")
-											htmlBuilder.append(renderListItemHtml(contentArr))
-										}
-
-										else -> {
-											htmlBuilder.append(renderGenericBlockHtml(qc))
-										}
-									}
-								}
-								if (inList == "bulleted_list_item") htmlBuilder.append("</ul>")
-								if (inList == "numbered_list_item") htmlBuilder.append("</ol>")
-							}
-
-							htmlBuilder.append("</blockquote>")
-						}
-
-						"callout" -> {
-							val content = renderRichText(block.getJSONObject("callout").getJSONArray("rich_text"))
-							htmlBuilder.append("<div class=\"callout\">").append(content).append("</div>")
-						}
-						"divider" -> htmlBuilder.append("<hr/>")
-						"video" -> {
-							val videoHtml = renderVideoBlock(block)
-							if (videoHtml.isNotEmpty()) htmlBuilder.append(videoHtml)
-						}
-						"image" -> {
-							val imageObj = block.getJSONObject("image")
-							val (purl, caption) = extractImageUrlAndCaption(imageObj)
-							// 按 Notion 格式控制宽度
-							val fmt = block.optJSONObject("format")
-							val bw = fmt?.optDouble("block_width", -1.0) ?: -1.0
-							val bh = fmt?.optDouble("block_height", -1.0) ?: -1.0
-							val styleSb = StringBuilder()
-							if (bw > 0) styleSb.append("width:").append(bw.toInt()).append("px;")
-							if (bh > 0) styleSb.append("height:").append(bh.toInt()).append("px;")
-							htmlBuilder.append("<img src=\"").append(purl)
-								.append("\" alt=\"").append(caption.replace("\"", "&quot;"))
-								.append("\" decoding=\"async\"")
-							if (styleSb.isNotEmpty()) htmlBuilder.append(" style=\"").append(styleSb).append("\"")
-							htmlBuilder.append("/>")
-						}
-						"table" -> {
-							val rows = fetchBlockChildren(block.getString("id"))
-							val tblFmt = block.optJSONObject("format")
-							val bw = tblFmt?.optDouble("block_width", -1.0) ?: -1.0
-							val tableStyle = if (bw > 0) " style=\"width:${bw.toInt()}px;\"" else ""
-							htmlBuilder.append("<table").append(tableStyle).append(">")
-							val tblObj = block.getJSONObject("table")
-							val hasCol = tblObj.optBoolean("has_column_header", false)
-//							val hasRow = tblObj.optBoolean("has_row_header", false)
-							if (hasCol && !rows.isEmpty) {
-								htmlBuilder.append("<thead><tr>")
-								val hdr = rows.getJSONObject(0).getJSONObject("table_row").getJSONArray("cells")
-								for (c in 0 until hdr.length()) {
-									val txt = renderRichText(hdr.getJSONArray(c))
-									htmlBuilder.append("<th>").append(txt).append("</th>")
-								}
-								htmlBuilder.append("</tr></thead>")
-							}
-							htmlBuilder.append("<tbody>")
-							for (r in (if (hasCol) 1 else 0) until rows.length()) {
-								htmlBuilder.append("<tr>")
-								val cells = rows.getJSONObject(r).getJSONObject("table_row").getJSONArray("cells")
-								for (c in 0 until cells.length()) {
-									val txt = renderRichText(cells.getJSONArray(c))
-									if (c == 0 && tblObj.optBoolean("has_row_header", false)) {
-										htmlBuilder.append("<th scope=\"row\">").append(txt).append("</th>")
-									} else {
-										htmlBuilder.append("<td>").append(txt).append("</td>")
-									}
-								}
-								htmlBuilder.append("</tr>")
-							}
-							htmlBuilder.append("</tbody></table>")
-						}
-						else -> {
-							htmlBuilder.append(renderGenericBlockHtml(block))
-						}
-					}
-				}
-				// 结束后关闭列表
-				if (currentListType == "bulleted_list_item") htmlBuilder.append("</ul>")
-				if (currentListType == "numbered_list_item") htmlBuilder.append("</ol>")
-				// 如果有内容，插入样式
-				if (htmlBuilder.isNotEmpty()) {
-					val styleTag = "<style>" +
-							"hr{border:none;border-top:1px solid #E1E3E5;margin:16px 0;}" +
-							"table{border-collapse:collapse;border:1px solid #E1E3E5;}" +
-							"th,td{border:1px solid #E1E3E5;padding:8px;text-align:left;}" +
-							"thead th{background-color:#f2f2f2;}" +
-							"tbody th{background-color:#f2f2f2;}" +
-							"img{max-width:600px;}" +
-							"a{text-decoration:underline;}" +
-							"pre{background:#f5f5f5;padding:10px;border-radius:3px;overflow:auto;}" +
-							"pre code{background:transparent;padding:0;}" +
-							"code{background:#f5f5f5;padding:2px 4px;border-radius:3px;font-family:monospace;}" +
-							"blockquote{border-left:4px solid #E1E3E5;margin:16px 0;padding-left:12px;}" +
-							".callout{border-left:4px solid #E0E2E4;background:#FAFAFA;padding:12px;margin:16px 0;}" +
-							"</style>"
-					item.put("styleTag", styleTag)
-//					htmlBuilder.insert(0, styleTag)
-				}
-//				println(htmlBuilder.toString())
-//				item["content"] = htmlBuilder.toString()
-				item.put("content", htmlBuilder.toString())
-
-
-//				output.add(item)
-				output.put(item)
-//				println(item)
-			}
-
-			return output
+		client.newCall(appendReq).execute().use { resp ->
+			if (!resp.isSuccessful) return false
 		}
 
+		/* ---------- 4. archive (delete) the original block ---------- */
+		val archiveBody = JSONObject().put("archived", true)
+			.toString()
+			.toRequestBody("application/json".toMediaTypeOrNull())
+
+		val archiveReq = requestBuilder("https://api.notion.com/v1/blocks/${blk.getString("id")}")
+			.patch(archiveBody)
+			.build()
+
+		client.newCall(archiveReq).execute().use { resp ->
+			if (!resp.isSuccessful) return false
+		}
+
+		return true
 	}
 
 	/**
@@ -645,7 +578,7 @@ class ENotion(
 						else -> value.toString()
 					}
 //					prop["date"] = JSONObject().apply { put("start", start) }
-					prop.put("date", JSONObject().apply { put("start", start) })
+					prop.put("date", if (value == null) JSONObject.NULL else JSONObject().put("start", start))
 				}
 
 //				"url" -> prop["url"] = value.toString()

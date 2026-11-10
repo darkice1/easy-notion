@@ -67,6 +67,12 @@ fun main() {
 }
 ```
 
+### 逐篇读取页面
+
+使用 `queryPages` 按游标查询页面属性，将所选页面交给 `renderPage` 读取分页正文和嵌套块。读取失败或无法渲染时整篇返回异常，调用方可以继续处理下一页。原有 `getDataBase` 批量入口仍可使用。
+
+`readPage` 读取当前属性，`NotionDocument.fingerprint` 根据正文和调用方指定的输入字段计算摘要，排除临时文件签名。`patchPageProperties` 按原样提交类型化属性，日期可写入 JSON null。新接口的 HTTP 异常包含状态码及可用的 Retry-After。
+
 ### 插入与更新
 
 ```kotlin
